@@ -4,8 +4,9 @@ import json
 import numpy as np
 import random
 from tqdm import tqdm
+import jsonlines
 
-from eval.metrics import (
+from src.eval.metrics import (
     qa_f1_score,
     rouge_zh_score,
     qa_f1_zh_score,
@@ -148,6 +149,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
         pred = tokenizer.decode(y[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
         preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
+    
     return preds
 
 
@@ -182,7 +184,6 @@ def longbench_eval_func(data_path, opt, model, tokenizer):
     scores = dict()
     for dataset in datasets:
         data = []
-        import jsonlines
         if eval_longbench_e:
             with open(os.path.join(data_path, dataset + '_e.jsonl'), "r+", encoding="utf8") as f:
                 for item in jsonlines.Reader(f):
@@ -219,6 +220,7 @@ def longbench_eval_func(data_path, opt, model, tokenizer):
             if "length" in pred:
                 lengths.append(pred["length"])
 
+        import pdb; pdb.set_trace()
         if eval_longbench_e:
             score = scorer_e(dataset, predictions, answers, lengths, all_classes)
         else:
@@ -226,8 +228,15 @@ def longbench_eval_func(data_path, opt, model, tokenizer):
         scores[dataset] = score
         print(f"LongBench {dataset} accuracy: {score}")
 
-    weighted_acc = sum(scores.values())/len(scores)
-    print("LongBench Average accuracy: {:.3f}".format(weighted_acc))
+    sum_scores={'0-4k': 0, '4-8k': 0, '8k+': 0}
+    for key in scores.keys():
+        sum_scores['0-4k'] += scores[key]['0-4k'] / len(scores)
+        sum_scores['4-8k'] += scores[key]['4-8k'] / len(scores)
+        sum_scores['8k+']  += scores[key]['8k+']  / len(scores)
 
-    return scores, weighted_acc
+    print("LongBench Average accuracy '0-4k': {:.3f}".format(sum_scores['0-4k']))
+    print("LongBench Average accuracy '4-8k': {:.3f}".format(sum_scores['4-8k']))
+    print("LongBench Average accuracy '8k+' : {:.3f}".format(sum_scores['8k+']))
+
+    return scores, sum_scores
     

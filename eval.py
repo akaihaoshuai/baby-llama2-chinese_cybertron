@@ -8,10 +8,11 @@ import torch
 import pandas as pd
 from src.models.model import Transformer
 from src.models.utils import ModelArgs
-from chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
+from tokenizer_model import ChatGLMTokenizer
 import numpy as np
 from setting import parser_args,parser_config
 from tqdm import tqdm
+from src.share import get_model_args
 
 def compute_bleu(labels, preds, weights=None):
     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -25,7 +26,6 @@ def eval_medical(model,tokenizer,opt,ctx,logger):
     answer_list=[]
     predict_lst=[]
     print(f'*************medical eval*************')
-
     scores = dict()
     for eval_data_path in opt.test_data_path:
         print(f'eval {eval_data_path}...')
@@ -54,7 +54,7 @@ def eval_medical(model,tokenizer,opt,ctx,logger):
                         # print('[prompt]:',prompt)
                         # print('[answer]:',answer)
                         # print('[predict]:',predict)
-        #
+        
         import jieba
         target_lst=[jieba.lcut(result.lower()) for result in answer_list]
         preds_lst=[jieba.lcut(result.lower()) for result in predict_lst]
@@ -92,26 +92,31 @@ def eval_longbench(model, tokenizer, opt, logger):
     from src.eval.longbench import longbench_eval_func
     scores, weighted_acc=longbench_eval_func('data/longBench', opt, model, tokenizer)
     for key in scores:
-        logger.info(f'model: {opt.save_path}. [LongBench] [{key}] scores: {scores[key]}')
-    logger.info(f'model: {opt.save_path}. [LongBench] aver_scores: {weighted_acc}')
+        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '0-4k' scores: {scores[key]['0-4k']}")
+        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '4-8k' scores: {scores[key]['4-8k']}")
+        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '8k+'  scores: {scores[key]['8k+']}")
+    logger.info(f"model: {opt.save_path}. [LongBench] 0-4k aver_scores: {weighted_acc['0-4k']}")
+    logger.info(f"model: {opt.save_path}. [LongBench] 4-8k aver_scores: {weighted_acc['4-8k']}")
+    logger.info(f"model: {opt.save_path}. [LongBench] 8k+  aver_scores: {weighted_acc['8k+']}")
 
 
-# def eval_LongEval(model, tokenizer, opt, logger):
-#     print(f'*************LongEval*************')
-#     from eval.longeval import longeval_eval_func
-#     scores, weighted_acc=longbench_eval_func('data/longBench', opt, model, tokenizer)
-#     for key in scores:
-#         logger.info(f'model: {opt.save_path}. [LongBench] [{key}] scores: {scores[key]}')
-#     logger.info(f'model: {opt.save_path}. [LongBench] aver_scores: {weighted_acc}')
+def eval_LongEval(model, tokenizer, opt, logger):
+    print(f'*************LongEval*************')
+    from src.eval.longeval import longeval_eval_func
+    scores, weighted_acc=longeval_eval_func('data/longEval', opt, model, tokenizer)
+    for key in scores:
+        logger.info(f'model: {opt.save_path}. [longEval] [{key}] scores: {scores[key]}')
+    logger.info(f'model: {opt.save_path}. [longEval] aver_scores: {weighted_acc}')
 
 
-# def eval_GSM8K(model, tokenizer, opt, logger):
-#     print(f'*************GSM8K*************')
-#     gsm8k = GSM8K(model, tokenizer, opt.output_dir)
-#     scores, weighted_acc=gsm8k.run(opt.shot, opt.split)
-#     for key in scores:
-#         logger.info(f'model: {opt.save_path}. [gsm8k] [{key}] scores: {scores[key]}')
-#     logger.info(f'model: {opt.save_path}. [gsm8k] aver_scores: {weighted_acc}')
+def eval_GSM8K(model, tokenizer, opt, logger):
+    print(f'*************GSM8K*************')
+    from src.eval.gsm8k import GSM8K
+    gsm8k = GSM8K(model, tokenizer, opt.output_dir)
+    scores, weighted_acc=gsm8k.run(opt.shot, opt.split)
+    for key in scores:
+        logger.info(f'model: {opt.save_path}. [gsm8k] [{key}] scores: {scores[key]}')
+    logger.info(f'model: {opt.save_path}. [gsm8k] aver_scores: {weighted_acc}')
 
 
 def eval(model_path_,opt,logger):
@@ -125,17 +130,8 @@ def eval(model_path_,opt,logger):
 
     # init from a model saved in a specific directory
     state_dict = torch.load(model_path_, map_location=opt.device)
-
-    model_args = dict(
-            dim=opt.dim,
-            n_layers=opt.n_layers,
-            n_heads=opt.n_heads,
-            n_kv_heads=opt.n_heads,
-            vocab_size=opt.vocab_size,#64793,
-            multiple_of=opt.multiple_of,
-            max_seq_len=opt.max_seq_len,
-            dropout=opt.dropout,
-        )  # 
+    
+    model_args = get_model_args(opt)
 
     gptconf = ModelArgs(**model_args)
     model = Transformer(gptconf)
@@ -153,14 +149,14 @@ def eval(model_path_,opt,logger):
 
     # load the tokenizer
     tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
-    #
+    
 
     try:
         eval_medical(model, tokenizer, opt, ctx, logger)
         eval_ceval(model, tokenizer, opt, logger)
         eval_mmlu(model, tokenizer, opt, logger)
-        # eval_longbench(model, tokenizer, opt, logger)
-        # eval_LongEval(model, tokenizer, opt, logger)
+        eval_longbench(model, tokenizer, opt, logger)
+        eval_LongEval(model, tokenizer, opt, logger)
         # eval_GSM8K(model, tokenizer, opt, logger)
     except:
         print(f'*************eval model: {model_path_}  err!!!!!!!!!*************')

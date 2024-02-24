@@ -9,7 +9,7 @@ import pandas as pd
 from src.dataset_sft import SFTDataset
 from src.dataset_pretrain import PretrainDataset
 import torch.nn.functional as F
-from chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
+from tokenizer_model import ChatGLMTokenizer
 from src.share import get_lr, get_logger, init_model, init_ddp
 
 
@@ -126,7 +126,7 @@ def full_ft_model(opt):
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     
     #-----init dataloader------
-    tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
+    tokenizer = ChatGLMTokenizer(vocab_file=opt.vocab_file)
 
     print(f"====================prepear dataset====================")
 
@@ -186,7 +186,6 @@ def full_ft_model(opt):
 if __name__=="__main__":
     from setting import parser_args,parser_config
     opt = parser_args()
-    batch_size = opt.batch_size
     
     # 遍历out目录下的所有pretrain文件夹,全部sft处理
     pretrain_list = os.listdir(opt.out_dir)
@@ -205,10 +204,10 @@ if __name__=="__main__":
                 file.write(yaml.dump(config))
 
             model_list = os.listdir(model_path)
-            for model_name in model_list:
-                if model_name.endswith('.pth'):
-                    opt.model_path = os.path.join(model_path, model_name)
-                    model_name = model_name.split('.')[-1]
+            for model_ in model_list:
+                if model_.endswith('.pth'):
+                    opt.model_path = os.path.join(model_path, model_)
+                    model_name = model_.split('.')[0]
 
                     log_dir = os.path.join(save_dir,f'{model_name}_log.log')
                     # if os.path.exists(log_dir):
@@ -226,5 +225,5 @@ if __name__=="__main__":
                     # exec(open("configurator.py").read())  # overrides from command line or config file
                     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
                     # -----------------------------------------------------------------------------
-                    opt.batch_size = batch_size
+                    opt.batch_size = 2
                     full_ft_model(opt)

@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import pandas as pd
 import os
+import gzip
 from datasets import load_dataset
 from src.share import get_logger
 from src.utils import *
@@ -83,7 +84,152 @@ def process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text = False):
             corpus_txts.close()
 
 
-def process_baidu(data_path, tokenizer, BATCH_SIZE, save_all_text=False):
+def process_C4(tokenizer, BATCH_SIZE, save_all_text=False):
+    data_path = GLOBAL_DATA_PATH
+
+    if check_is_processed(f'{GLOBAL_DATA_PATH}/pretrain_C4', data_path):
+        print(f'pretrain_C4 has been processed')
+        return
+
+    dataset_list = {
+        # 'en',
+        # 'en.noblocklist',
+        # 'en.noclean',
+        # 'multilingual',
+        'realnewslike',
+    }
+    data_dict = dict()
+    for data_name in dataset_list:
+        data_dict[data_name] = getAllFiles(os.path.join(data_path, "c4/"+data_name))
+
+    def parse_gz(path):
+        g = gzip.open(path, 'rb')
+        for l in g:
+            yield json.loads(l)
+
+    for key in data_dict:
+        print(f'process C4 {key}')
+
+        if save_all_text:
+            corpus_txts = open(f'./data/tokenizer_C4_{key}.txt', 'w', encoding='utf-8')
+
+        doc_ids = []
+        batch_cnt = 0
+        total_id_len = 0
+        for data_list in tqdm(data_dict[key]):
+            for line in parse_gz(data_list):
+                line = line['text']
+
+                if not line:
+                    break
+                if len(line) < GLOBAL_MIN_LEN:
+                    continue
+
+                if tokenizer is not None:
+                    text_id = tokenizer.encode(line, add_special_tokens=False)
+                    text_id.append(tokenizer.special_tokens['<eos>'])
+                    if len(text_id) < GLOBAL_MIN_LEN:
+                        continue
+
+                    doc_ids += text_id
+                    total_id_len += len(text_id)
+
+                if save_all_text:
+                    corpus_txts.write(line)
+
+                if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
+                    arr = np.array(doc_ids, dtype=np.uint16)
+                    with open(f'{data_path}/pretrain_C4_{key}_{batch_cnt}.bin', 'wb') as f:
+                        f.write(arr.tobytes())
+                    batch_cnt += 1
+                    doc_ids = []
+                    del arr
+
+        if len(doc_ids) > 0:
+            arr = np.array(doc_ids, dtype=np.uint16)
+            with open(f'{data_path}/pretrain_C4_{key}_{batch_cnt}.bin', 'wb') as f:
+                f.write(arr.tobytes())
+        print(f'processed C4_{key} tokens: {total_id_len}')
+        logger.info(f'processed C4_{key} tokens: {total_id_len}')
+
+        if save_all_text:
+            corpus_txts.close()
+
+
+def process_Chinese_medical_dialogue(tokenizer, BATCH_SIZE, save_all_text=False):
+    data_path = GLOBAL_DATA_PATH
+
+    if check_is_processed(f'{GLOBAL_DATA_PATH}/pretrain_Chinese_medical_dialogue', data_path):
+        print(f'pretrain_Chinese_medical_dialogue has been processed')
+        return
+
+    if save_all_text:
+        corpus_txts = open(f'./data/tokenizer_Chinese_medical_dialogue.txt', 'w', encoding='utf-8')
+
+    data_files = getAllFiles(os.path.join(data_path, "Chinese-medical-dialogue-data/Data_数据"))
+
+    doc_ids = []
+    batch_cnt = 0
+    total_id_len = 0
+    for file_name in tqdm(data_files):
+        if not file_name.endswith(".csv"):
+            continue
+
+        import chardet
+        encoding = 'ISO'
+        with open(file_name, 'r', encoding='gb2312') as f:
+            line = f.readline()
+
+            while True:
+                try:
+                    line = f.readline()
+                except:
+                    continue
+
+                if not line:
+                    break
+
+                lines = line.split(',')
+                if len(lines) != 4:
+                    continue
+
+                text = lines[1] +"。"+ lines[2]+"。"+lines[3]
+                if len(text) < GLOBAL_MIN_LEN:
+                    continue
+
+                if tokenizer is not None:
+                    text_id = tokenizer.encode(text, add_special_tokens=False)
+                    text_id.append(tokenizer.special_tokens['<eos>'])
+                    if len(text_id) < GLOBAL_MIN_LEN:
+                        continue
+
+                    doc_ids += text_id
+                    total_id_len += len(text_id)
+
+                if save_all_text:
+                    corpus_txts.write(text)
+
+                if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
+                    arr = np.array(doc_ids, dtype=np.uint16)
+                    with open(f'{data_path}/pretrain_Chinese_medical_dialogue_{batch_cnt}.bin', 'wb') as f:
+                        f.write(arr.tobytes())
+                    batch_cnt += 1
+                    doc_ids = []
+                    del arr
+
+    if len(doc_ids) > 0:
+        arr = np.array(doc_ids, dtype=np.uint16)
+        with open(f'{data_path}/pretrain_Chinese_medical_dialogue_{batch_cnt}.bin', 'wb') as f:
+            f.write(arr.tobytes())
+    print(f'processed Chinese_medical_dialogue tokens: {total_id_len}')
+    logger.info(f'processed Chinese_medical_dialogue tokens: {total_id_len}')
+
+    if save_all_text:
+        corpus_txts.close()
+            
+            
+            
+def process_baidu(filenam, tokenizer, BATCH_SIZE, save_all_text=False):
     batch_cnt = 0
     doc_ids = []
     data_path = GLOBAL_DATA_PATH
@@ -93,14 +239,14 @@ def process_baidu(data_path, tokenizer, BATCH_SIZE, save_all_text=False):
         return
 
     if save_all_text:
-        corpus_txts = open(f'./data/tokenizer_baidubaike_563w.txt', 'w', encoding='utf-8')
+        corpus_txts = open(f'{data_path}/tokenizer_baidubaike_563w.txt', 'w', encoding='utf-8')
 
-    if not os.path.exists(data_path):
+    if not os.path.exists(filenam):
         print(
-            f'{data_path} is not exist. please download from: https://huggingface.co/datasets/xuqinyang/BaiduBaike-5.63M/blob/main/563w_baidubaike.json')
+            f'{filenam} is not exist. please download from: https://huggingface.co/datasets/xuqinyang/BaiduBaike-5.63M/blob/main/563w_baidubaike.json')
         return
 
-    f1 = open(data_path, 'r', encoding='utf-8')
+    f1 = open(filenam, 'r', encoding='utf-8')
     total_id_len = 0
     while True:
         line = f1.readline()
@@ -114,11 +260,13 @@ def process_baidu(data_path, tokenizer, BATCH_SIZE, save_all_text=False):
             pass
         for per in line['sections']:
             text += per['title'] + ': ' + per['content'] + '。'
+
+        if len(text) < GLOBAL_MIN_LEN:
+            continue
+
         if tokenizer is not None:
             text_id = tokenizer.encode(text, add_special_tokens=False)
             text_id.append(tokenizer.special_tokens['<eos>'])
-            if len(text_id) < GLOBAL_MIN_LEN:
-                continue
             doc_ids += text_id
             total_id_len+=len(text_id)
 
@@ -166,12 +314,13 @@ def process_wiki_zh_clean(tokenizer, wiki_data_path, save_all_text=False):
     total_id_len=0
     for line in tqdm(data):
         text = line['completion']
+        if len(text_id) < GLOBAL_MIN_LEN:
+            continue
         if tokenizer is not None:
             text_id = tokenizer.encode(text, add_special_tokens=False)
             text_id.append(tokenizer.special_tokens['<eos>'])
-            if len(text_id) > GLOBAL_MIN_LEN:
-                doc_ids += text_id
-                total_id_len += len(text_id)
+            doc_ids += text_id
+            total_id_len += len(text_id)
         if save_all_text:
             corpus_txts.write(text + '\n')
 
@@ -294,108 +443,117 @@ def process_wiki_en(tokenizer, BATCH_SIZE, save_all_text=False):
     logger.info(f'processed pretrain_tdtunlp_wikipedia_en tokens: {total_id_len}')
 
 
-def process_MNBVC_clean(tokenizer, BATCH_SIZE, save_all_text=False):
+def process_MNBVC(tokenizer, BATCH_SIZE, save_all_text=False):
     # https://huggingface.co/datasets/liwu/MNBVC
     dataset_list = {
         # 'law_judgement',       # 法律
         # 'gov_xuexiqiangguo',   # 学习强国
         # 'gov_report',          # 政府工作报告
-        # 'co_ann_report',       # 企业年报
+        'co_ann_report',       # 企业年报
         # 'code_metadata',       # 代码元数据
         'qa_zhihu',  # 知乎的问答
         # 'qa_wikihow:',         # wikihow的问答  好像不存在??
         # 'qa_mfa:',             # 外交部问答数据
         # 'news_peoples_daily',  # 人民日报的文本
         # 'wikipedia',           # 维基百科的文本
-        'qa_stackexchange',  # StackExchange的问答
-        'qa_chatgpt',  # ChatGPT构造的问答语料
+        # 'qa_stackexchange',  # StackExchange的问答
+        # 'qa_chatgpt',  # ChatGPT构造的问答语料
         # 'math_qa',             # 数学领域有关的问答
         # 'math_chat',           # 数学领域有关的对话数据数据，可以提升模型Chain of Thought的能力
         'crawler_oscar',  # 从CommonCrawl中清洗出来的通用文本数据
     }
 
-    if save_all_text:
-        corpus_txts = open(f'./data/tokenizer_MNBVC_clean.txt', 'w', encoding='utf-8')
-
     data_path = GLOBAL_DATA_PATH
     for dataset_name in dataset_list:
-        dateset_path = f'{data_path}/pretrain_mnbvc_{dataset_name}.bin'
-        target_p = dateset_path.replace('.bin', f'_{0}.bin')
-        if not os.path.exists(target_p):
-            total_id_len = 0
-            try:
-                batch_cnt = 0
-                print(f'load [MNBVC] {dataset_name}')
-                dataset = load_dataset("liwu/MNBVC", dataset_name, split='train', streaming=True)
-                doc_ids = []
+        batch_cnt = 0
+        dateset_path = f'{data_path}/pretrain_mnbvc_{dataset_name}_{batch_cnt}.bin'
 
-                if 'crawler_oscar' == dataset_name:
-                    for line in tqdm(dataset):
-                        # next(iter(dataset))  # get the first line
-                        for paragraph in line['段落']:
-                            # rr=line['response_rejected']
-                            if tokenizer is not None:
-                                content_id = tokenizer.encode(paragraph['内容'], add_special_tokens=False)
-                                # rr_id=tokenizer.encode(rr,add_special_tokens=False)
-                                text_id = content_id + [tokenizer.special_tokens['<eos>']]
-                                if len(text_id) > GLOBAL_MIN_LEN:
-                                    doc_ids += text_id
-                                    total_id_len += len(text_id)
+        if os.path.exists(dateset_path):
+            print(f'{dateset_path} has been processed')
+            continue
 
-                            if save_all_text:
-                                corpus_txts.write(paragraph['内容'] + '\n')
+        total_id_len = 0
+        try:
+            batch_cnt = 0
+            print(f'load [MNBVC] {dataset_name}')
+            dataset = load_dataset("liwu/MNBVC", dataset_name, split='train', streaming=True)
+            doc_ids = []
 
-                        if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
-                            arr = np.array(doc_ids, dtype=np.uint16)
-                            target_p = dateset_path.replace('.bin', f'_{batch_cnt}.bin')
-                            with open(target_p, 'wb') as f:
-                                f.write(arr.tobytes())
-                            batch_cnt += 1
-                            doc_ids = []
-                            del arr
-                else:
-                    for line in tqdm(dataset):
-                        # next(iter(dataset))  # get the first line
-                        q = line['问']
-                        rc = line['答']
+            if save_all_text:
+                corpus_txts = open(f'./data/tokenizer_MNBVC_{dataset_name}.txt', 'w', encoding='utf-8')
+
+            if 'crawler_oscar' == dataset_name:
+                for line in tqdm(dataset):
+                    # next(iter(dataset))  # get the first line
+                    for paragraph in line['段落']:
                         # rr=line['response_rejected']
+                        if len(paragraph['内容']) < GLOBAL_MIN_LEN:
+                            continue
+
                         if tokenizer is not None:
-                            q_id = tokenizer.encode(q, add_special_tokens=False)
-                            rc_id = tokenizer.encode(rc, add_special_tokens=False)
+                            content_id = tokenizer.encode(paragraph['内容'], add_special_tokens=False)
                             # rr_id=tokenizer.encode(rr,add_special_tokens=False)
-                            text_id = q_id + rc_id + [tokenizer.special_tokens['<eos>']]
-                            if len(text_id) < GLOBAL_MIN_LEN:
-                                continue
-                            doc_ids += text_id
-                            total_id_len += len(text_id)
+                            text_id = content_id + [tokenizer.special_tokens['<eos>']]
+                            if len(text_id) > GLOBAL_MIN_LEN:
+                                doc_ids += text_id
+                                total_id_len += len(text_id)
 
                         if save_all_text:
-                            corpus_txts.write(q + rc + '\n')
+                            corpus_txts.write(paragraph['内容'] + '\n')
 
-                        if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
-                            arr = np.array(doc_ids, dtype=np.uint16)
-                            target_p = dateset_path.replace('.bin', f'_{batch_cnt}.bin')
-                            with open(target_p, 'wb') as f:
-                                f.write(arr.tobytes())
-                            batch_cnt += 1
-                            doc_ids = []
-                            del arr
+                    if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
+                        arr = np.array(doc_ids, dtype=np.uint16)
+                        target_p = dateset_path.replace(f'{0}.bin', f'{batch_cnt}.bin')
+                        with open(target_p, 'wb') as f:
+                            f.write(arr.tobytes())
+                        batch_cnt += 1
+                        doc_ids = []
+                        del arr
+            else:
+                for line in tqdm(dataset):
+                    # next(iter(dataset))  # get the first line
+                    q = line['问']
+                    rc = line['答']
 
-                if len(doc_ids) > 0:
-                    arr = np.array(doc_ids, dtype=np.uint16)
-                    target_p = dateset_path.replace('.bin', f'_{batch_cnt}.bin')
-                    with open(target_p, 'wb') as f:
-                        f.write(arr.tobytes())
-            except:
-                print(f'dowload {dateset_path} error....')
-        else:
-            print(f'{dateset_path} has been processed')
+                    if len(q+rc) < GLOBAL_MIN_LEN:
+                        continue
 
-    if save_all_text:
-        corpus_txts.close()
+                    # rr=line['response_rejected']
+                    if tokenizer is not None:
+                        q_id = tokenizer.encode(q, add_special_tokens=False)
+                        rc_id = tokenizer.encode(rc, add_special_tokens=False)
+                        # rr_id=tokenizer.encode(rr,add_special_tokens=False)
+                        text_id = q_id + rc_id + [tokenizer.special_tokens['<eos>']]
+                        if len(text_id) < GLOBAL_MIN_LEN:
+                            continue
+                        doc_ids += text_id
+                        total_id_len += len(text_id)
 
-    print(f'processed process_MNBVC_clean tokens: {total_id_len}')
-    logger.info(f'processed process_MNBVC_clean tokens: {total_id_len}')
+                    if save_all_text:
+                        corpus_txts.write(q + rc + '\n')
+
+                    if len(doc_ids) > 0 and len(doc_ids) > BATCH_SIZE:
+                        arr = np.array(doc_ids, dtype=np.uint16)
+                        target_p = dateset_path.replace('.bin', f'_{batch_cnt}.bin')
+                        with open(target_p, 'wb') as f:
+                            f.write(arr.tobytes())
+                        batch_cnt += 1
+                        doc_ids = []
+                        del arr
+
+            if len(doc_ids) > 0:
+                arr = np.array(doc_ids, dtype=np.uint16)
+                target_p = dateset_path.replace(f'{0}.bin', f'{batch_cnt}.bin')
+                with open(target_p, 'wb') as f:
+                    f.write(arr.tobytes())
+
+            if save_all_text:
+                corpus_txts.close()
+        except:
+            print(f'dowload {dateset_path} error....')
+
+    print(f'processed process_MNBVC tokens: {total_id_len}')
+    logger.info(f'processed process_MNBVC tokens: {total_id_len}')
 
 
 def process_medical(file_path, name, tokenizer, save_all_text=False):

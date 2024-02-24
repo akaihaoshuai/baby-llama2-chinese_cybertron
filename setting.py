@@ -1,9 +1,11 @@
 from argparse import ArgumentParser
 import yaml
+import json
 
 def parser_args():
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
+    parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
     parser.add_argument("--save_path", type=str, default='', help="path to config")
     parser.add_argument("--train_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
@@ -49,6 +51,7 @@ def parser_args():
     # system
     parser.add_argument("--device", type=str, default='cuda', help="path to config")
     parser.add_argument("--compile", type=bool, default=False)
+    parser.add_argument("--local_rank", type=int, default=0)
 
     #eval
     parser.add_argument("--max_new_tokens", type=int, default=100)
@@ -116,3 +119,24 @@ def parser_config(opt):
     opt.shot = config['eval_params']['shot']
 
     return opt,config
+
+def read_deepspeed_config(opt):
+    with open(opt.ds_config) as f:
+        ds_config = json.load(f)
+
+    ds_config['optimizer']['params']['lr']=opt.learning_rate
+    ds_config['optimizer']['params']['betas'][0]=opt.beta1
+    ds_config['optimizer']['params']['betas'][0]=opt.beta2
+    ds_config['optimizer']['params']['weight_decay']=opt.weight_decay
+
+    # ds_config['train_batch_size']=opt.batch_size  # 如果设置了gradient_accumulation_steps和train_micro_batch_size_per_gpu，则忽略
+    ds_config['train_micro_batch_size_per_gpu']=opt.batch_size  # 不考虑梯度处理
+    ds_config['gradient_accumulation_steps']=opt.grad_accum_steps  # 梯度累积
+
+    ds_config['scheduler']['params']['warmup_num_steps']=opt.warmup_iters  # 
+
+
+    ds_config['steps_per_print']=opt.log_interval  # 
+    ds_config['gradient_clipping']=opt.grad_clip  # 
+
+    return ds_config

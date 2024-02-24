@@ -6,11 +6,12 @@ from tqdm import  tqdm
 def collect_data(merge_txt_list,merged_txt_path):
     corpus=open(merged_txt_path,'w',encoding='utf-8')
     cnt=0
-    for file in merge_txt_list:
+    for idx, file in enumerate(merge_txt_list):
+        print(f'[{idx}/{len(merge_txt_list)}] open {file}...')
         with open(file,'r',encoding='utf-8') as f:
             for line in tqdm(f.readlines()):
                 # print(line.strip())
-                if len(line.strip())>100:
+                if len(line.strip())>50:
                     corpus.write(line.strip()+'\n')
                     cnt+=1
     print(cnt)
@@ -85,7 +86,7 @@ def train_tokenizer(merged_txt_path,tokenizer_name):
         max_sentence_length=16384,  # 句子最大长度
         pad_id=3,
         model_type="BPE",
-        vocab_size=60000,
+        vocab_size=50000,
         split_digits=True,
         split_by_unicode_script=True,
         byte_fallback=True,
@@ -215,7 +216,7 @@ if __name__=="__main__":
     merged_txt_path = os.path.join(data_path,'merged_tokenizer.txt')
     # collect_data(merge_txt_list,merged_txt_path)
 
-    tokenizer_name = 'baby'
+    tokenizer_name = 'baby40k'
     train_tokenizer(merged_txt_path, tokenizer_name)
 
     import sentencepiece as spm

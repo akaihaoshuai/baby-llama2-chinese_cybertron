@@ -101,7 +101,7 @@ def eval(opt, subject, model, tokenizer, dev_df, test_df, choices):
     return cors, acc, all_probs
 
 def mmlu_eval_func(data_path, opt, model, tokenizer):
-    from eval.categories import subcategories, categories
+    from src.eval.categories import subcategories, categories
     subjects = sorted(
         [
             f.split("_test.csv")[0]

@@ -10,52 +10,36 @@ from src.dataset_sft import SFTDataset
 from src.dataset_pretrain import PretrainDataset
 import torch.nn.functional as F
 from tokenizer_model import ChatGLMTokenizer
-from src.share import get_lr, get_logger, init_model, init_ddp,configure_optimizers
+from src.share import get_lr,get_logger,init_model,init_ddp,configure_optimizers
+from setting import parser_args,parser_config,read_deepspeed_config
+import deepspeed
 
-
-def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model,scaler,ctx,logger):
+def sft_epoch(epoch,opt,train_loader,optimizer,model_engine,logger):
     iter_per_epoch=len(train_loader)
     start_time=time.time()
     
+    start_time=time.time()
+    iter_per_epoch=len(train_loader)
+
+    ave_time = []
     for step, (X, Y, loss_mask) in enumerate(train_loader):
+        single_time_start=time.time()
+
         X=X.to(opt.device)
         Y=Y.to(opt.device)
-        loss_mask=loss_mask.to(opt.device)
-
-        lr = get_lr(epoch*iter_per_epoch+step, opt) if opt.decay_lr else opt.learning_rate
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-        # and using the GradScaler if data type is float16
-        #for micro_step in range(gradient_accumulation_steps):
-        if ddp:
-            # in DDP training we only need to sync gradients at the last micro step.
-            # the official way to do this is with model.no_sync() context manager, but
-            # I really dislike that this bloats the code and forces us to repeat code
-            # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = 0 == opt.gradient_accumulation_steps - 1
+        _, loss, _ = model_engine(X, Y)
         
-        with ctx:
-            logits,loss, _ = model(X, Y)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
-            loss_mask = loss_mask.view(-1)
-            loss = torch.sum(loss*loss_mask)/loss_mask.sum()
-            # loss = raw_model.last_loss
-            #loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
-        #
-        if((step+1) % opt.gradient_accumulation_steps)==0:
-            # clip the gradient
-            if opt.grad_clip != 0.0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), opt.grad_clip)
-            # step the optimizer and scaler if training in fp16
-            scaler.step(optimizer)
-            scaler.update()
-            # flush the gradients as soon as we can, no need for this memory anymore
-            optimizer.zero_grad(set_to_none=True)
-            
+        model_engine.backward(loss)
+        model_engine.step()
+
+        single_time_end=time.time()
+        ave_time.append(single_time_end - single_time_start)
+        if len(ave_time) > 50:
+            del(ave_time[0])
+        # print(f'model train ave time: {round(mean(ave_time),6)} s')
+
         #打印日志
         if step % opt.log_interval == 0:
             spend_time=time.time()-start_time
@@ -65,20 +49,19 @@ def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model,scaler,ctx,logger):
                         opt.max_epoch, 
                         step, 
                         iter_per_epoch,
-                        loss.item(), 
+                        loss, 
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
-
+            
 @torch.no_grad()
-def valid_epoch(opt, model, val_loader,ctx, logger):
+def valid_epoch(opt, model, val_loader, logger):
     losses = []
     model.eval()
     for epoch in range(opt.max_epoch):
         for _, (X, Y) in enumerate(val_loader):
             X=X.to(opt.device)
             Y=Y.to(opt.device)
-            with ctx:
-                logits,loss= model(X, Y)
+            logits,loss= model(X, Y)
             losses.append(loss.item())
     model.train()
     val_loss=np.mean(losses)
@@ -96,26 +79,29 @@ def full_ft_model(opt):
 
     print(f'**************model_path: {opt.model_path}**************')
 
+    # 并行环境初始化
+    ds_config = read_deepspeed_config(opt)
+    if opt.local_rank == 0:
+        print(ds_config)
+
     #init model
     model=init_model(opt)
     ckpt = torch.load(opt.model_path, map_location=torch.device('cpu'))
     model.load_state_dict(ckpt)
-    model.to(opt.device)
 
     # optimizer
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
-                                     (opt.beta1, opt.beta2), opt.device)
-    # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(opt.dtype == 'float16'))
-    #
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=opt.max_epoch, 
-                                                                     T_mult=1, eta_min=1e-6, last_epoch=-1)
+                                     (opt.beta1, opt.beta2), opt.device, False)
     
-    # compile the model
-    if opt.compile:
-        print("compiling the model... (takes a ~minute)")
-        unoptimized_model = model
-        model = torch.compile(model) # requires PyTorch 2.0
+    # deepspeed初始化
+    deepspeed.init_distributed()
+    model_engine, optimizer_engine, _, _ = deepspeed.initialize(
+        config=ds_config,
+        model=model,
+        optimizer=optimizer,
+        model_parameters=filter(lambda p: p.requires_grad, model.parameters()),
+    )
+
     # wrap model into DDP container
     if ddp:
         # Ignore the `freqs_cis` buffer so that DDP does not broadcast it at
@@ -124,7 +110,6 @@ def full_ft_model(opt):
         model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
         model = DDP(model, device_ids=[ddp_local_rank])
         #
-    raw_model = model.module if ddp else model # unwrap DDP container if needed
     
     #-----init dataloader------
     tokenizer = ChatGLMTokenizer(vocab_file=opt.vocab_file)
@@ -163,31 +148,29 @@ def full_ft_model(opt):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
     
-        sft_epoch(epoch,ddp,opt,train_loader,optimizer,model,scaler,ctx,logger)
-        val_loss=valid_epoch(opt, model, val_loader,ctx, logger)
+        sft_epoch(epoch,opt,train_loader,optimizer,model_engine,logger)
+        val_loss=valid_epoch(opt,model_engine,val_loader,logger)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
             if master_process:  #一般用0，当然，可以选任意的rank保存。
-                torch.save(raw_model.state_dict(),'{}/pretrain_{}_best.pth'.format(save_dir,model_name.split('.')[0]))
+                torch.save(model.state_dict(),'{}/pretrain_{}_best.pth'.format(save_dir,model_name.split('.')[0]))
 
         if master_process:  #一般用0，当然，可以选任意的rank保存。
-            torch.save(raw_model.state_dict(),'{}/pretrain_{}_epoch_{}.pth'.format(save_dir,model_name.split('.')[0],epoch))
-    
+            torch.save(model.state_dict(),'{}/pretrain_{}_epoch_{}.pth'.format(save_dir,model_name.split('.')[0],epoch))
     if ddp:
         destroy_process_group()
 
 # I/O
 if __name__=="__main__":
-    from setting import parser_args,parser_config
     opt = parser_args()
     
     # 遍历out目录下的所有pretrain文件夹,全部sft处理
     pretrain_list = os.listdir(opt.out_dir)
     for pretrain_model in pretrain_list:
         model_path = os.path.join(opt.out_dir, pretrain_model)
-        if 'pretrain' in model_path and 'ds' not in model_path:  # 使用ds训练的模型，可能会爆内存
+        if 'pretrain' in model_path:
             opt.config = os.path.join(model_path, 'config.yaml')
             opt,config = parser_config(opt)
 

@@ -152,11 +152,11 @@ def test_lines_one_sample(model, tokenizer, test_case, output_file, idx, opt):
     
     return expected_number == response_number, len(prompt), summary
 
-def longeval_eval_func(data_path, opt, model, tokenizer):
+def longeval_eval_func(data_path, opt, model, tokenizer, model_path_name):
     # if opt.task == "topics":
     scores = dict()
 
-    dir_name = os.path.splitext(opt.save_path)[0]+'_LongEval'
+    dir_name = os.path.splitext(model_path_name)[0]+'_LongEval'
     if not os.path.exists(dir_name):
         os.makedirs(dir_name)
 

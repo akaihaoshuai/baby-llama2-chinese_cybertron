@@ -24,7 +24,7 @@ else  # deepspeed
         CUDA_VISIBLE_DEVICES=10 nohup python eval.py >out/eval_ds_log
     else
         CUDA_VISIBLE_DEVICES=1,2,3,4 deepspeed --num_gpus=4 pretrain_ds.py
-        CUDA_VISIBLE_DEVICES=1,2,3,4 deepspeed --num_gpus=4  fine_tuning_ds.py
+        CUDA_VISIBLE_DEVICES=1,2,3,4 deepspeed --num_gpus=4 fine_tuning_ds.py
         CUDA_VISIBLE_DEVICES=1 python eval.py
     fi
 fi

@@ -14,15 +14,17 @@ class GSM8K:
         model: PreTrainedModel,
         tokenizer: PreTrainedTokenizerBase,
         opt,
+        model_path_name,
     ):
         self.model = model
         self.tokenizer = tokenizer
         self.opt = opt
+        self.model_path_name = model_path_name
 
     def run(self, data_path, shot: int):
         results, accs = {}, {}
 
-        dir_name = os.path.splitext(self.opt.save_path)[0]+'_Ceval'
+        dir_name = os.path.splitext(self.model_path_name)[0]+'_Ceval'
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
 

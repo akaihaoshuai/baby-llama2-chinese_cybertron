@@ -6,7 +6,6 @@ def parser_args():
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
     parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
-    parser.add_argument("--save_path", type=str, default='', help="path to config")
     parser.add_argument("--train_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--test_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
@@ -70,7 +69,6 @@ def parser_config(opt):
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.Loader)
     
-    opt.save_path = config['save_path']
     opt.train_data_path = config['dataset_params']['train_data_path']
     opt.valid_data_path = config['dataset_params']['valid_data_path']
     opt.sft_data_path = config['dataset_params']['sft_data_path']

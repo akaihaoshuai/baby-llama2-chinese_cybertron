@@ -162,7 +162,7 @@ def seed_everything(seed):
     torch.backends.cudnn.deterministic = True
     torch.cuda.manual_seed_all(seed)
 
-def longbench_eval_func(data_path, opt, model, tokenizer):
+def longbench_eval_func(data_path, opt, model, tokenizer, model_path_name):
     seed_everything(opt.seed) # 1337/42
     
     eval_longbench_e = True
@@ -179,7 +179,7 @@ def longbench_eval_func(data_path, opt, model, tokenizer):
     dataset2maxlen = json.load(open(os.path.join(data_path,"dataset2maxlen.json"), "r"))
     
     # predict on each dataset
-    dir_name = os.path.splitext(opt.save_path)[0]+'_longBench'
+    dir_name = os.path.splitext(model_path_name)[0]+'_longBench'
 
     scores = dict()
     for dataset in datasets:
@@ -220,7 +220,6 @@ def longbench_eval_func(data_path, opt, model, tokenizer):
             if "length" in pred:
                 lengths.append(pred["length"])
 
-        import pdb; pdb.set_trace()
         if eval_longbench_e:
             score = scorer_e(dataset, predictions, answers, lengths, all_classes)
         else:

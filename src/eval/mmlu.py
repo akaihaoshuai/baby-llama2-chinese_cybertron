@@ -100,7 +100,7 @@ def eval(opt, subject, model, tokenizer, dev_df, test_df, choices):
 
     return cors, acc, all_probs
 
-def mmlu_eval_func(data_path, opt, model, tokenizer):
+def mmlu_eval_func(data_path, opt, model, tokenizer, model_path_name):
     from src.eval.categories import subcategories, categories
     subjects = sorted(
         [
@@ -110,7 +110,7 @@ def mmlu_eval_func(data_path, opt, model, tokenizer):
         ]
     )
 
-    dir_name = os.path.splitext(opt.save_path)[0]+'_MMLU'
+    dir_name = os.path.splitext(model_path_name)[0]+'_MMLU'
     if not os.path.exists(dir_name):
         os.makedirs(dir_name)
 
@@ -138,11 +138,11 @@ def mmlu_eval_func(data_path, opt, model, tokenizer):
                     cat_cors[key].append(cors)
         all_cors.append(cors)
 
-        test_df["{}_correct".format(opt.save_path)] = cors
+        test_df["{}_correct".format(model_path_name)] = cors
 
         for j in range(probs.shape[1]):
             choice = choices[j]
-            test_df["{}_choice{}_probs".format(opt.save_path, choice)] = probs[:, j]
+            test_df["{}_choice{}_probs".format(model_path_name, choice)] = probs[:, j]
         
         test_df.to_csv(
             os.path.join(dir_name, "results_{}.csv".format(subject)),

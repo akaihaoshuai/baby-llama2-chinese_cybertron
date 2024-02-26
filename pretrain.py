@@ -36,7 +36,7 @@ def pretrain_epoch(epoch, model, train_loader, scaler, optimizer, opt, ctx):
             model.require_backward_grad_sync = 0 == opt.grad_accum_steps - 1
         
         with ctx:
-            logits, loss = model(X, Y)
+            _, loss, _ = model(X, Y)
             # loss.reduction ='mean':
             loss = loss / opt.grad_accum_steps
         
@@ -105,7 +105,7 @@ def pretrain_model(opt):
     #init model
     model=init_model(opt)
     model.to(opt.device)
-    if torch.distributed.get_rank() == 0: 
+    if master_process:
         tensor_n1, params1, tensor_n2, params2, num_nodecay_params = model.print_params()
         print(f"=================models=================\n",model)
         print(f"=================models:para=================\n",model.params)
@@ -113,7 +113,8 @@ def pretrain_model(opt):
         print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(model.layers)}, with {params2}*{len(model.layers)} parameters")
         print(f"num decayed parameter tensors: {params1+params2*len(model.layers)} parameters")
         print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
-        
+   
+    
     # optimizer
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
                                      (opt.beta1, opt.beta2), opt.device)
@@ -183,17 +184,12 @@ def pretrain_model(opt):
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
-            if ddp:
-                if torch.distributed.get_rank() == 0:  #一般用0，当然，可以选任意的rank保存。
-                    torch.save(raw_model.state_dict(),'{}/best.pth'.format(save_dir))
-            else:
+            if master_process:  #一般用0，当然，可以选任意的rank保存。
                 torch.save(raw_model.state_dict(),'{}/best.pth'.format(save_dir))
 
-        if ddp:
-            if torch.distributed.get_rank() == 0:  #一般用0，当然，可以选任意的rank保存。
-                torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
-        else:
+        if master_process:  #一般用0，当然，可以选任意的rank保存。
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
+    
     if ddp:
         destroy_process_group()
     

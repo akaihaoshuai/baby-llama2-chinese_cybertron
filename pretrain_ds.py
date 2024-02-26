@@ -25,9 +25,7 @@ def pretrain_epoch_ds(epoch, model_engine, train_loader, optimizer, opt):
         X=X.to(opt.device)
         Y=Y.to(opt.device)
         
-        logits, loss = model_engine(X, Y)
-        # loss.reduction ='mean':
-        loss = loss / opt.grad_accum_steps
+        _, loss, _ = model_engine(X, Y)
         
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16
@@ -66,7 +64,7 @@ def valid_epoch_ds(model, val_loader, opt):
             losses.append(loss.item())
     model.train()
     val_loss=np.mean(losses)
-    #
+    
     logger.info('valid loss = {:.4f}'.format(val_loss))
 
     return val_loss
@@ -96,7 +94,7 @@ def pretrain_model(opt):
         print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
 
 
-    # 同时初始化生成器和判别器
+    # deepspeed初始化
     deepspeed.init_distributed()
     model_engine, optimizer_engine, _, _ = deepspeed.initialize(
         config=ds_config,
@@ -139,7 +137,7 @@ def pretrain_model(opt):
     best_val_loss = 1e9
     for epoch in range(opt.max_epoch):
         pretrain_epoch_ds(epoch, model_engine, train_loader, optimizer, opt)
-        val_loss=valid_epoch_ds(model_engine, val_loader, opt)
+        val_loss=valid_epoch_ds(model, val_loader, opt)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -156,6 +154,7 @@ def pretrain_model(opt):
 # I/O
 if __name__=="__main__":
     opt = parser_args()
+    opt.config = 'config/config_ds.yaml'
     opt,config = parser_config(opt)
 
     # -----------------------------------------------------------------------------

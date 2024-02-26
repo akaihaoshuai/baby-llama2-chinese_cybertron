@@ -22,7 +22,8 @@ def compute_bleu(labels, preds, weights=None):
                                   smoothing_function=SmoothingFunction().method1,
                                   weights=weights) for label, pred in zip(labels, preds)])
 
-def eval_medical(model,tokenizer,opt,ctx,logger):
+
+def eval_medical(model,model_path_name,tokenizer,opt,ctx,logger):
     answer_list=[]
     predict_lst=[]
     print(f'*************medical eval*************')
@@ -61,65 +62,73 @@ def eval_medical(model,tokenizer,opt,ctx,logger):
         score = compute_bleu(preds_lst, target_lst)*100
         print(f'{eval_data_path}: eval_scores: {score}')
         scores[eval_data_path] = score
-        logger.info(f'model: {opt.save_path}. [medical] [{eval_data_path}] scores: {score}')
+        logger.info(f'model: [medical] [{eval_data_path}] scores: {score}')
 
     weighted_acc = sum(scores.values())/len(scores)
-    logger.info(f'model: {opt.save_path}. [medical] aver_scores: {weighted_acc}')
+    logger.info(f'model: {model_path_name}. [medical] aver_scores: {weighted_acc}')
 
 
-def eval_ceval(model, tokenizer, opt, logger):
+def eval_ceval(model, model_path_name, tokenizer, opt, logger):
     print(f'*************CEval*************')
     from src.eval.ceval import CEval
-    ceval = CEval(model, tokenizer, opt)
+    ceval = CEval(model, tokenizer, opt, model_path_name)
     accs, average_acc=ceval.run('data/ceval-exam',opt.shot)
     for key in accs:
-        logger.info(f'model: {opt.save_path}. [Ceval] [{key}] scores: {accs[key]*100}')
-    logger.info(f'model: {opt.save_path}. [Ceval] aver_scores: {average_acc*100}')
+        logger.info(f'model: {model_path_name}. [Ceval] [{key}] scores: {accs[key]*100}')
+    logger.info(f'model: {model_path_name}. [Ceval] aver_scores: {average_acc*100}')
 
 
-def eval_mmlu(model, tokenizer, opt, logger):
+def eval_mmlu(model, model_path_name, tokenizer, opt, logger):
     print(f'*************MMLU*************')
     from src.eval.mmlu import mmlu_eval_func
-    cat_cors, weighted_acc=mmlu_eval_func('data/mmlu', opt, model, tokenizer)
+    cat_cors, weighted_acc=mmlu_eval_func('data/mmlu', opt, model, tokenizer, model_path_name)
     for cat in cat_cors:
         cat_acc = np.mean(np.concatenate(cat_cors[cat]))
-        logger.info(f'model: {opt.save_path}. [MMLU] [{cat}] scores: {cat_acc*100}')
-    logger.info(f'model: {opt.save_path}. [MMLU] aver_scores: {weighted_acc*100}')
+        logger.info(f'model: {model_path_name}. [MMLU] [{cat}] scores: {cat_acc*100}')
+    logger.info(f'model: {model_path_name}. [MMLU] aver_scores: {weighted_acc*100}')
 
 
-def eval_longbench(model, tokenizer, opt, logger):
+def eval_longbench(model, model_path_name, tokenizer, opt, logger):
     print(f'*************LongBench*************')
     from src.eval.longbench import longbench_eval_func
-    scores, weighted_acc=longbench_eval_func('data/longBench', opt, model, tokenizer)
+    scores, weighted_acc=longbench_eval_func('data/longBench', opt, model, tokenizer, model_path_name)
     for key in scores:
-        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '0-4k' scores: {scores[key]['0-4k']}")
-        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '4-8k' scores: {scores[key]['4-8k']}")
-        logger.info(f"model: {opt.save_path}. [LongBench] [{key}] '8k+'  scores: {scores[key]['8k+']}")
-    logger.info(f"model: {opt.save_path}. [LongBench] 0-4k aver_scores: {weighted_acc['0-4k']}")
-    logger.info(f"model: {opt.save_path}. [LongBench] 4-8k aver_scores: {weighted_acc['4-8k']}")
-    logger.info(f"model: {opt.save_path}. [LongBench] 8k+  aver_scores: {weighted_acc['8k+']}")
+        logger.info(f"model: {model_path_name}. [LongBench] [{key}] '0-4k' scores: {scores[key]['0-4k']}")
+        logger.info(f"model: {model_path_name}. [LongBench] [{key}] '4-8k' scores: {scores[key]['4-8k']}")
+        logger.info(f"model: {model_path_name}. [LongBench] [{key}] '8k+'  scores: {scores[key]['8k+']}")
+    logger.info(f"model: {model_path_name}. [LongBench] 0-4k aver_scores: {weighted_acc['0-4k']}")
+    logger.info(f"model: {model_path_name}. [LongBench] 4-8k aver_scores: {weighted_acc['4-8k']}")
+    logger.info(f"model: {model_path_name}. [LongBench] 8k+  aver_scores: {weighted_acc['8k+']}")
 
 
-def eval_LongEval(model, tokenizer, opt, logger):
+def eval_LongEval(model, model_path_name, tokenizer, opt, logger):
     print(f'*************LongEval*************')
     from src.eval.longeval import longeval_eval_func
-    scores, weighted_acc=longeval_eval_func('data/longEval', opt, model, tokenizer)
+    scores, weighted_acc=longeval_eval_func('data/longEval', opt, model, tokenizer, model_path_name)
     for key in scores:
-        logger.info(f'model: {opt.save_path}. [longEval] [{key}] scores: {scores[key]}')
-    logger.info(f'model: {opt.save_path}. [longEval] aver_scores: {weighted_acc}')
+        logger.info(f'model: {model_path_name}. [longEval] [{key}] scores: {scores[key]}')
+    logger.info(f'model: {model_path_name}. [longEval] aver_scores: {weighted_acc}')
 
 
-def eval_GSM8K(model, tokenizer, opt, logger):
+def eval_perplexity(model,model_path_name,tokenizer,opt,ctx,logger):
+    from src.eval.perplexity import Perplexity
+    ppl_results = Perplexity.compute('data/longEval', opt, model, tokenizer, model_path_name)
+    for key in ppl_results:
+        logger.info(f'model: {model_path_name}. [longEval Perplexity] [{key} ppl]: {ppl_results['perplexities'][key]}')
+    logger.info(f'model: {model_path_name}. [longEval Perplexity] mean_ppl: {ppl_results['mean_perplexity']}')
+
+
+def eval_GSM8K(model, model_path_name, tokenizer, opt, logger):
     print(f'*************GSM8K*************')
     from src.eval.gsm8k import GSM8K
-    gsm8k = GSM8K(model, tokenizer, opt.output_dir)
+    gsm8k = GSM8K(model, tokenizer, opt, model_path_name)
     scores, weighted_acc=gsm8k.run(opt.shot, opt.split)
     for key in scores:
-        logger.info(f'model: {opt.save_path}. [gsm8k] [{key}] scores: {scores[key]}')
-    logger.info(f'model: {opt.save_path}. [gsm8k] aver_scores: {weighted_acc}')
+        logger.info(f'model: {model_path_name}. [gsm8k] [{key}] scores: {scores[key]}')
+    logger.info(f'model: {model_path_name}. [gsm8k] aver_scores: {weighted_acc}')
 
 
-def eval(model_path_,opt,logger):
+def eval(model_path_name,opt,logger):
     torch.manual_seed(opt.seed)
     torch.cuda.manual_seed(opt.seed)
     torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
@@ -129,7 +138,7 @@ def eval(model_path_,opt,logger):
     ctx = nullcontext() if device_type == 'cpu' else torch.cuda.amp.autocast()
 
     # init from a model saved in a specific directory
-    state_dict = torch.load(model_path_, map_location=opt.device)
+    state_dict = torch.load(model_path_name, map_location=opt.device)
     
     model_args = get_model_args(opt)
 
@@ -151,16 +160,14 @@ def eval(model_path_,opt,logger):
     tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
     
 
-    try:
-        eval_medical(model, tokenizer, opt, ctx, logger)
-        eval_ceval(model, tokenizer, opt, logger)
-        eval_mmlu(model, tokenizer, opt, logger)
-        eval_longbench(model, tokenizer, opt, logger)
-        eval_LongEval(model, tokenizer, opt, logger)
-        # eval_GSM8K(model, tokenizer, opt, logger)
-    except:
-        print(f'*************eval model: {model_path_}  err!!!!!!!!!*************')
-        logger.info(f'model: {opt.save_path}. eval error!!!!!!!!!!!!!!!')
+    eval_perplexity(model, model_path_name, tokenizer, opt, ctx, logger)
+    eval_medical(model, model_path_name, tokenizer, opt, ctx, logger)
+    eval_ceval(model, model_path_name, tokenizer, opt, logger)
+    eval_mmlu(model, model_path_name, tokenizer, opt, logger)
+    eval_longbench(model, model_path_name, tokenizer, opt, logger)
+    eval_LongEval(model, model_path_name, tokenizer, opt, logger)
+    # eval_perplexity(model, model_path_name, tokenizer, opt, ctx, logger)
+    # eval_GSM8K(model, model_path_name, tokenizer, opt, logger)
 
 
 # I/O
@@ -190,6 +197,6 @@ if __name__=="__main__":
                 model_n = os.path.join(model_path_, model_name)
                 
                 if model_n.endswith('.pth'):
-                    opt.save_path = model_n #os.path.join(model_path_, 'best.pth')
+                    eval_model_path_name = model_n #os.path.join(model_path_, 'best.pth')
                     print(f'*************eval model: {model_path_}*************')
-                    eval(opt.save_path,opt,logger)
+                    eval(eval_model_path_name,opt,logger)

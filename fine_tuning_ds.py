@@ -6,12 +6,13 @@ import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import pandas as pd
-from src.dataset_sft import SFTDataset
-from src.dataset_pretrain import PretrainDataset
+from src.data.dataset_sft import SFTDataset
+from src.data.dataset_pretrain import PretrainDataset
 import torch.nn.functional as F
 from tokenizer_model import ChatGLMTokenizer
-from src.share import get_lr,get_logger,init_model,init_ddp,configure_optimizers
-from setting import parser_args,parser_config,read_deepspeed_config
+from src.share import *
+from src.utils import *
+from setting import *
 import deepspeed
 
 def sft_epoch(epoch,opt,train_loader,optimizer,model_engine,logger):
@@ -52,26 +53,9 @@ def sft_epoch(epoch,opt,train_loader,optimizer,model_engine,logger):
                         loss, 
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
-            
-@torch.no_grad()
-def valid_epoch(opt, model, val_loader, logger):
-    losses = []
-    model.eval()
-    for epoch in range(opt.max_epoch):
-        for _, (X, Y) in enumerate(val_loader):
-            X=X.to(opt.device)
-            Y=Y.to(opt.device)
-            logits,loss= model(X, Y)
-            losses.append(loss.item())
-    model.train()
-    val_loss=np.mean(losses)
-    #
-    logger.info('valid loss = {:.4f}'.format(val_loss))
-
-    return val_loss
 
 
-def full_ft_model(opt):
+def ft_model(opt):
     master_process, ddp_local_rank,ctx= init_ddp(ddp, opt)
     
     if master_process:
@@ -81,13 +65,20 @@ def full_ft_model(opt):
 
     # 并行环境初始化
     ds_config = read_deepspeed_config(opt)
-    if opt.local_rank == 0:
+    if master_process:
         print(ds_config)
 
     #init model
     model=init_model(opt)
-    ckpt = torch.load(opt.model_path, map_location=torch.device('cpu'))
-    model.load_state_dict(ckpt)
+    model_path, state_dict, lora_path, lora_state_dict = read_ckpt(opt.model_path)
+    load_weight(model, state_dict)
+    model.to(opt.device)
+    if opt.ft_type == 'lora':
+        from src.loralib.utils import mark_only_lora_as_trainable
+        mark_only_lora_as_trainable(model)
+        
+    if master_process:
+        model.print_params()
 
     # optimizer
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
@@ -142,6 +133,8 @@ def full_ft_model(opt):
 
     print(f"====================sft_epoch====================")
 
+    model_save_type = 'lora' if opt.ft_type =='lora' else 'all'
+
     # sft loop
     best_val_loss = 0.0
     for epoch in range(opt.max_epoch):
@@ -149,32 +142,39 @@ def full_ft_model(opt):
             train_sampler.set_epoch(epoch)
     
         sft_epoch(epoch,opt,train_loader,optimizer,model_engine,logger)
-        val_loss=valid_epoch(opt,model_engine,val_loader,logger)
+        val_loss=valid_epoch(model_engine, val_loader, opt, logger)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
             if master_process:  #一般用0，当然，可以选任意的rank保存。
-                torch.save(model.state_dict(),'{}/pretrain_{}_best.pth'.format(save_dir,model_name.split('.')[0]))
+                save_path = '{}/pretrain_{}_ft_best_{}.pth'.format(save_dir,model_name.split('.')[0], epoch)
+                save_model(model, save_path, model_save_type)
 
         if master_process:  #一般用0，当然，可以选任意的rank保存。
-            torch.save(model.state_dict(),'{}/pretrain_{}_epoch_{}.pth'.format(save_dir,model_name.split('.')[0],epoch))
+            save_path = '{}/pretrain_{}_ft_epoch_{}.pth'.format(save_dir,model_name.split('.')[0], epoch)
+            save_model(model, save_path, model_save_type)
+
     if ddp:
         destroy_process_group()
 
 # I/O
 if __name__=="__main__":
-    opt = parser_args()
+    opt = get_parser_args()
     
     # 遍历out目录下的所有pretrain文件夹,全部sft处理
     pretrain_list = os.listdir(opt.out_dir)
     for pretrain_model in pretrain_list:
         model_path = os.path.join(opt.out_dir, pretrain_model)
-        if 'pretrain' in model_path:
+        if 'pretrain' in model_path and os.path.isdir(model_path):
             opt.config = os.path.join(model_path, 'config.yaml')
-            opt,config = parser_config(opt)
+            opt,config = parser_model_config(opt, is_train=False)
 
-            save_dir =model_path.replace('pretrain', 'sft_bell')
+            if opt.ft_type == 'lora':
+                save_dir =model_path.replace('pretrain', 'lora_ft_ds')
+            else:
+                save_dir =model_path.replace('pretrain', 'fft_ds')
+            
             if not os.path.exists(save_dir): os.makedirs(save_dir)
 
             # 保存一份参数
@@ -205,4 +205,4 @@ if __name__=="__main__":
                     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
                     # -----------------------------------------------------------------------------
                     opt.batch_size = 2
-                    full_ft_model(opt)
+                    ft_model(opt)

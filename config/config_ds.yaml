@@ -37,7 +37,7 @@ train_params:
   log_interval: 200
   eval_iters: 200
   eval_only: False
-  always_save_checkpoint: True
+  always_save_ckpt: True
   init_from: 'scratch'
   grad_accum_steps: 64
   batch_size: 4
@@ -55,6 +55,15 @@ train_params:
   backend: 'nccl'
   device: 'cuda'
   compile: False
+
+fine_tuning_params:
+  ft_type: 'full_ft'  # full_ft/lora/qlora 
+  lora_mudule: 'linear'  # linear/embedding/all
+  lora_attn_dim: 8
+  lora_attn_alpha: 128
+  lora_dropout: 0.0
+  lora_r_dropout: 0.0
+
 
 eval_params:
   max_new_tokens: 100

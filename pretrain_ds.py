@@ -5,12 +5,12 @@ import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from src.dataset_pretrain import PretrainDataset
-from src.share import get_logger,init_model,configure_optimizers,init_ddp
+from src.data.dataset_pretrain import PretrainDataset
 from numpy import *
-from src.utils import *
 import deepspeed
-from setting import parser_args,parser_config,read_deepspeed_config
+from src.utils import *
+from src.share import *
+from setting import *
 
 #To run with DDP on 4 gpus on 1 node, example:
 # torchrun --standalone --nproc_per_node=4 pretrain.py OR python -m torch.distributed.launch --nproc_per_node=4 pretrain.py
@@ -52,30 +52,13 @@ def pretrain_epoch_ds(epoch, model_engine, train_loader, optimizer, opt):
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
         
 
-@torch.no_grad()
-def valid_epoch_ds(model, val_loader, opt):
-    losses = []
-    model.eval()
-    for epoch in range(opt.max_epoch):
-        for _, (X, Y) in enumerate(val_loader):
-            X=X.to(opt.device)
-            Y=Y.to(opt.device)
-            logits, loss = model(X, Y)
-            losses.append(loss.item())
-    model.train()
-    val_loss=np.mean(losses)
-    
-    logger.info('valid loss = {:.4f}'.format(val_loss))
-
-    return val_loss
-
 
 def pretrain_model(opt):
     master_process,ddp_local_rank,ctx=init_ddp(ddp, opt)
 
     # 并行环境初始化
     ds_config = read_deepspeed_config(opt)
-    if opt.local_rank == 0:
+    if master_process:
         print(ds_config)
     
     os.makedirs(opt.out_dir, exist_ok=True)
@@ -84,14 +67,8 @@ def pretrain_model(opt):
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
                                      (opt.beta1, opt.beta2), opt.device, use_fused=False)
 
-    if opt.local_rank == 0:
-        tensor_n1, params1, tensor_n2, params2, num_nodecay_params = model.print_params()
-        print(f"=================models=================\n",model)
-        print(f"=================models:para=================\n",model.params)
-        print(f"[tok_embeddings]: num decayed parameter tensors: {tensor_n1}, with {params1} parameters")
-        print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(model.layers)}, with {params2}*{len(model.layers)} parameters")
-        print(f"num decayed parameter tensors: {params1+params2*len(model.layers)} parameters")
-        print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
+    if master_process:
+        model.print_params()
 
 
     # deepspeed初始化
@@ -137,7 +114,7 @@ def pretrain_model(opt):
     best_val_loss = 1e9
     for epoch in range(opt.max_epoch):
         pretrain_epoch_ds(epoch, model_engine, train_loader, optimizer, opt)
-        val_loss=valid_epoch_ds(model, val_loader, opt)
+        val_loss=valid_epoch(model, val_loader, opt, logger)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -146,16 +123,19 @@ def pretrain_model(opt):
             client_sd=dict()
             client_sd['step'] = epoch
             ckpt_id = val_loss
-            model_engine.save_checkpoint('{}/best.pth'.format(save_dir), ckpt_id, client_sd = client_sd)
+            save_model(model, '{}/best.pth'.format(save_dir))
+            # model_engine.save_checkpoint('{}/best.pth'.format(save_dir), ckpt_id, client_sd = client_sd)
 
-        model_engine.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
+        save_model(model, '{}/epoch_{}.pth'.format(save_dir,epoch))
+        # model_engine.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
 
 
 # I/O
 if __name__=="__main__":
-    opt = parser_args()
+    opt = get_parser_args()
     opt.config = 'config/config_ds.yaml'
-    opt,config = parser_config(opt)
+    opt,config = parser_model_config(opt)
+    opt.lora_path = None   # 预训练肯定不加载lora
 
     # -----------------------------------------------------------------------------
     config_keys = [

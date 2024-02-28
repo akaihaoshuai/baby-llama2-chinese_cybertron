@@ -2,7 +2,7 @@ from argparse import ArgumentParser
 import yaml
 import json
 
-def parser_args():
+def get_parser_args():
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
     parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
@@ -10,31 +10,36 @@ def parser_args():
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--test_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--sft_data_path", type=str, default='./data/sft_data.csv', help="path to config")
-    parser.add_argument("--max_seq_len", type=int, default=512)
     parser.add_argument("--out_dir", type=str, default='out', help="path to config")
     parser.add_argument("--model_path", type=str, default='best.pth', help="path to config")
+    parser.add_argument("--lora_path", type=str, default='', help="")
     
     # model param
     parser.add_argument("--dim", type=int, default=512)
     parser.add_argument("--n_layers", type=int, default=8)
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--n_kv_heads", type=int, default=0, help="0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA")
+    parser.add_argument("--max_seq_len", type=int, default=512)
+    parser.add_argument("--multiple_of", type=int, default=32)
+    parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--use_bias", type=bool, default=False)
+    parser.add_argument("--norm_eps", type=float, default=0.00001)
+    parser.add_argument("--flash_attention", type=bool, default=False)
     parser.add_argument("--dtype", type=str, default='float16', help="path to config")
     parser.add_argument("--vocab_size", type=int, default=64793)
     parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
+    parser.add_argument('--model_type', type=str, default="Model", choices=['Model'])
+    
     # train params
     parser.add_argument("--max_epoch", type=int, default=2)
     parser.add_argument("--eval_interval", type=int, default=1)
     parser.add_argument("--log_interval", type=int, default=200)
     parser.add_argument("--eval_iters", type=int, default=200)
     parser.add_argument("--eval_only", type=bool, default=False)
-    parser.add_argument("--always_save_checkpoint", type=bool, default=True)
+    parser.add_argument("--always_save_ckpt", type=bool, default=True)
     parser.add_argument("--init_from", type=str, default='scratch', help="path to config")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
+    parser.add_argument("--grad_accum_steps", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--multiple_of", type=int, default=32)
-    parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-1)
     parser.add_argument("--beta1", type=float, default=0.9)
@@ -43,6 +48,15 @@ def parser_args():
     parser.add_argument("--decay_lr", type=bool, default=True)
     parser.add_argument("--warmup_iters", type=int, default=1000)
     parser.add_argument("--lr_decay_iters", type=int, default=80000)
+
+    # fine_tuning params
+    parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
+    parser.add_argument('--lora_mudule', type=str, default="linear", choices=['linear', 'embedding', 'all'])
+    parser.add_argument("--lora_attn_dim", type=int, default=8)
+    parser.add_argument("--lora_attn_alpha", type=int, default=128)
+    parser.add_argument("--lora_dropout", type=float, default=0.0)
+    parser.add_argument("--lora_r_dropout", type=float, default=0.0)
+
     # learning rate decay settings
     parser.add_argument("--min_lr", type=float, default=1e-5)
     # DDP settings
@@ -61,62 +75,95 @@ def parser_args():
 
     parser.add_argument("--use_tensorboard", type=bool, default=True)
 
-    opt = parser.parse_args()
+    return parser.parse_args()
 
-    return opt
-
-def parser_config(opt):
+def parser_model_config(opt):
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.Loader)
     
-    opt.train_data_path = config['dataset_params']['train_data_path']
-    opt.valid_data_path = config['dataset_params']['valid_data_path']
-    opt.sft_data_path = config['dataset_params']['sft_data_path']
-    opt.test_data_path = config['dataset_params']['test_data_path']
-    opt.max_seq_len = config['dataset_params']['max_seq_len']
+    dataset_params_yaml = config.get('dataset_params')
+    if None != dataset_params_yaml:
+        opt.train_data_path = dataset_params_yaml.get('train_data_path', opt.train_data_path)
+        opt.valid_data_path = dataset_params_yaml.get('valid_data_path', opt.valid_data_path)
+        opt.sft_data_path = dataset_params_yaml.get('sft_data_path', opt.sft_data_path)
+        opt.test_data_path = dataset_params_yaml.get('test_data_path', opt.test_data_path)
     
-    opt.model_path = config['model_path']
+    opt.model_path = config.get('model_path',opt.model_path)
 
-    opt.dim = config['model_params']['dim']
-    opt.n_layers = config['model_params']['n_layers']
-    opt.n_heads = config['model_params']['n_heads']
-    opt.n_kv_heads = config['model_params']['n_kv_heads']
-    opt.use_bias = config['model_params']['use_bias']
-    opt.dtype = config['model_params']['dtype']
-    opt.vocab_size = config['model_params']['vocab_size']
-    opt.vocab_file = config['model_params']['vocab_file']
+    model_params_yaml = config.get('model_params')
+    if None != model_params_yaml:
+        opt.dim = model_params_yaml.get('dim', opt.dim)
+        opt.n_layers = model_params_yaml.get('n_layers', opt.n_layers)
+        opt.n_heads = model_params_yaml.get('n_heads', opt.n_heads)
+        opt.n_kv_heads = model_params_yaml.get('n_kv_heads', opt.n_kv_heads)
+        opt.max_seq_len = model_params_yaml.get('max_seq_len', opt.max_seq_len)
+        opt.multiple_of = model_params_yaml.get('multiple_of', opt.multiple_of)
+        opt.dropout = model_params_yaml.get('dropout', opt.dropout)
+        opt.norm_eps = model_params_yaml.get('norm_eps', opt.norm_eps)
+        opt.use_bias = model_params_yaml.get('use_bias', opt.use_bias)
+        opt.flash_attention = model_params_yaml.get('flash_attention', opt.flash_attention)
+        opt.dtype = model_params_yaml.get('dtype', opt.dtype)
+        opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
+        opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)
+        opt.model_type = model_params_yaml.get('model_type', opt.model_type)
 
-    opt.max_epoch = config['train_params']['max_epoch']
-    opt.eval_interval = config['train_params']['eval_interval']
-    opt.log_interval = config['train_params']['log_interval']
-    opt.eval_iters = config['train_params']['eval_iters']
-    opt.eval_only = config['train_params']['eval_only']
-    opt.always_save_checkpoint = config['train_params']['always_save_checkpoint']
-    opt.init_from = config['train_params']['init_from']
-    opt.grad_accum_steps = config['train_params']['grad_accum_steps']
-    opt.batch_size = config['train_params']['batch_size']
-    opt.multiple_of = config['train_params']['multiple_of']
-    opt.dropout = config['train_params']['dropout']
-    opt.learning_rate = config['train_params']['learning_rate']
-    opt.weight_decay = config['train_params']['weight_decay']
-    opt.beta1 = config['train_params']['beta1']
-    opt.beta2 = config['train_params']['beta2']
-    opt.grad_clip = config['train_params']['grad_clip']
-    opt.decay_lr = config['train_params']['decay_lr']
-    opt.warmup_iters = config['train_params']['warmup_iters']
-    opt.lr_decay_iters = config['train_params']['lr_decay_iters']
-    opt.min_lr = config['train_params']['min_lr']
-    opt.backend = config['train_params']['backend']
-    opt.device = config['train_params']['device']
-    opt.compile = config['train_params']['compile']
+    # train
+    train_params_yaml = config.get('train_params')
+    if None != train_params_yaml:
+        opt.max_epoch = train_params_yaml.get('max_epoch', opt.max_epoch)
+        opt.eval_interval = train_params_yaml.get('eval_interval', opt.eval_interval)
+        opt.log_interval = train_params_yaml.get('log_interval', opt.log_interval)
+        opt.eval_iters = train_params_yaml.get('eval_iters', opt.eval_iters)
+        opt.eval_only = train_params_yaml.get('eval_only', opt.eval_only)
+        opt.always_save_ckpt = train_params_yaml.get('always_save_ckpt', opt.always_save_ckpt)
+        opt.init_from = train_params_yaml.get('init_from', opt.init_from)
+        opt.grad_accum_steps = train_params_yaml.get('grad_accum_steps', opt.grad_accum_steps)
+        opt.batch_size = train_params_yaml.get('batch_size', opt.batch_size)
+        opt.learning_rate = train_params_yaml.get('learning_rate', opt.learning_rate)
+        opt.weight_decay = train_params_yaml.get('weight_decay', opt.weight_decay)
+        opt.beta1 = train_params_yaml.get('beta1', opt.beta1)
+        opt.beta2 = train_params_yaml.get('beta2', opt.beta2)
+        opt.grad_clip = train_params_yaml.get('grad_clip', opt.grad_clip)
+        opt.decay_lr = train_params_yaml.get('decay_lr', opt.decay_lr)
+        opt.warmup_iters = train_params_yaml.get('warmup_iters', opt.warmup_iters)
+        opt.lr_decay_iters = train_params_yaml.get('lr_decay_iters', opt.lr_decay_iters)
+        opt.min_lr = train_params_yaml.get('min_lr', opt.min_lr)
+        opt.backend = train_params_yaml.get('backend', opt.backend)
+        opt.device = train_params_yaml.get('device', opt.device)
+        opt.compile = train_params_yaml.get('compile', opt.compile)
 
-    opt.max_new_tokens = config['eval_params']['max_new_tokens']
-    opt.temperature = config['eval_params']['temperature']
-    opt.top_k = config['eval_params']['top_k']
-    opt.seed = config['eval_params']['seed']
-    opt.shot = config['eval_params']['shot']
+    # fine_tuning_params_yaml = config.get('fine_tuning_params')
+    # if None != fine_tuning_params_yaml:
+    #     opt.ft_type = fine_tuning_params_yaml.get('ft_type', opt.ft_type)
+    #     opt.lora_mudule = fine_tuning_params_yaml.get('lora_mudule', opt.lora_mudule)
+    #     opt.lora_attn_dim = fine_tuning_params_yaml.get('lora_attn_dim', opt.lora_attn_dim)
+    #     opt.lora_attn_alpha = fine_tuning_params_yaml.get('lora_attn_alpha', opt.lora_attn_alpha)
+    #     opt.lora_dropout = fine_tuning_params_yaml.get('lora_dropout', opt.lora_dropout)
+    #     opt.lora_r_dropout = fine_tuning_params_yaml.get('lora_r_dropout', opt.lora_r_dropout)
+
+
+    # eval
+    eval_params_yaml = config.get('eval_params')
+    if None != eval_params_yaml:
+        opt.max_new_tokens = eval_params_yaml.get('max_new_tokens', opt.max_new_tokens)
+        opt.temperature = eval_params_yaml.get('temperature', opt.temperature)
+        opt.top_k = eval_params_yaml.get('top_k', opt.top_k)
+        opt.seed = eval_params_yaml.get('seed', opt.seed)
+        opt.shot = eval_params_yaml.get('shot', opt.shot)
 
     return opt,config
+
+
+def set_fine_tuning_paras_to_config(opt, config):
+    fine_tuning_params = dict()
+    fine_tuning_params['ft_type'] = opt.ft_type
+    fine_tuning_params['lora_mudule'] = opt.lora_mudule
+    fine_tuning_params['lora_attn_dim'] = opt.lora_attn_dim
+    fine_tuning_params['lora_attn_alpha'] = opt.lora_attn_alpha
+    fine_tuning_params['lora_dropout'] = opt.lora_dropout
+    fine_tuning_params['lora_r_dropout'] = opt.lora_r_dropout
+    config['fine_tuning_params'] = fine_tuning_params
+
 
 def read_deepspeed_config(opt):
     with open(opt.ds_config) as f:
@@ -127,9 +174,9 @@ def read_deepspeed_config(opt):
     ds_config['optimizer']['params']['betas'][0]=opt.beta2
     ds_config['optimizer']['params']['weight_decay']=opt.weight_decay
 
-    # ds_config['train_batch_size']=opt.batch_size  # 如果设置了gradient_accumulation_steps和train_micro_batch_size_per_gpu，则忽略
+    # ds_config['train_batch_size']=opt.batch_size  # 如果设置了grad_accum_steps和train_micro_batch_size_per_gpu，则忽略
     ds_config['train_micro_batch_size_per_gpu']=opt.batch_size  # 不考虑梯度处理
-    ds_config['gradient_accumulation_steps']=opt.grad_accum_steps  # 梯度累积
+    ds_config['grad_accum_steps']=opt.grad_accum_steps  # 梯度累积
 
     ds_config['scheduler']['params']['warmup_num_steps']=opt.warmup_iters  # 
 

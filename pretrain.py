@@ -5,10 +5,10 @@ import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from src.dataset_pretrain import PretrainDataset
-from src.share import get_lr,get_logger,init_model,init_ddp,configure_optimizers
+from src.data.dataset_pretrain import PretrainDataset
 from numpy import *
 from src.utils import *
+from src.share import *
 
 #To run with DDP on 4 gpus on 1 node, example:
 # torchrun --standalone --nproc_per_node=4 pretrain.py OR python -m torch.distributed.launch --nproc_per_node=4 pretrain.py
@@ -77,25 +77,6 @@ def pretrain_epoch(epoch, model, train_loader, scaler, optimizer, opt, ctx):
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
         
 
-@torch.no_grad()
-def valid_epoch(model, val_loader, opt, ctx):
-    losses = []
-    model.eval()
-    for epoch in range(opt.max_epoch):
-        for _, (X, Y) in enumerate(val_loader):
-            X=X.to(opt.device)
-            Y=Y.to(opt.device)
-            with ctx:
-                logits, loss = model(X, Y)
-            losses.append(loss.item())
-    model.train()
-    val_loss=np.mean(losses)
-    #
-    logger.info('valid loss = {:.4f}'.format(val_loss))
-
-    return val_loss
-
-
 def pretrain_model(opt):
     master_process,ddp_local_rank,ctx=init_ddp(ddp, opt)
 
@@ -106,15 +87,8 @@ def pretrain_model(opt):
     model=init_model(opt)
     model.to(opt.device)
     if master_process:
-        tensor_n1, params1, tensor_n2, params2, num_nodecay_params = model.print_params()
-        print(f"=================models=================\n",model)
-        print(f"=================models:para=================\n",model.params)
-        print(f"[tok_embeddings]: num decayed parameter tensors: {tensor_n1}, with {params1} parameters")
-        print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(model.layers)}, with {params2}*{len(model.layers)} parameters")
-        print(f"num decayed parameter tensors: {params1+params2*len(model.layers)} parameters")
-        print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
+        model.print_params()
    
-    
     # optimizer
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
                                      (opt.beta1, opt.beta2), opt.device)
@@ -174,31 +148,32 @@ def pretrain_model(opt):
     
     # training loop
     best_val_loss = 1e9
+    val_loss = 0.0
     for epoch in range(opt.max_epoch):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
         pretrain_epoch(epoch, model, train_loader, scaler, optimizer, opt, ctx)
-        val_loss=valid_epoch(model, val_loader, opt, ctx)
+        val_loss=valid_epoch(model, val_loader, opt, logger, ctx)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
             if master_process:  #一般用0，当然，可以选任意的rank保存。
-                torch.save(raw_model.state_dict(),'{}/best.pth'.format(save_dir))
+                save_model(raw_model, '{}/best.pth'.format(save_dir))
 
         if master_process:  #一般用0，当然，可以选任意的rank保存。
-            torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
+            save_model(raw_model, '{}/epoch_{}.pth'.format(save_dir,epoch))
     
     if ddp:
         destroy_process_group()
     
 # I/O
 if __name__=="__main__":
-    
-    from setting import parser_args,parser_config
-    opt = parser_args()
-    opt,config = parser_config(opt)
+    from setting import get_parser_args,parser_model_config
+    opt = get_parser_args()
+    opt, config = parser_model_config(opt)
+    opt.lora_path = None   # 预训练肯定不加载lora
 
     # -----------------------------------------------------------------------------
     config_keys = [

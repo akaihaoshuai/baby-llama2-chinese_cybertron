@@ -37,7 +37,7 @@
             "warmup_type": "linear"
         }
     },
-    "gradient_accumulation_steps": "auto",
+    "grad_accum_steps": "auto",
     "train_micro_batch_size_per_gpu": "auto",
     "steps_per_print": 2000,
     "gradient_clipping": 1.0,

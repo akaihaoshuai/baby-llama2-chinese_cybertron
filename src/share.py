@@ -2,14 +2,11 @@ import os
 import math
 from contextlib import nullcontext
 import torch
-from src.models.utils import ModelArgs
 from src.models.model_loader import _get_model_architecture
 from torch.distributed import init_process_group
 import logging
-from typing import Dict, Sequence
-import transformers
-import copy
 import inspect
+import numpy as np
 
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -51,22 +48,6 @@ def get_lr(it, opt):
     return opt.min_lr + coeff * (opt.learning_rate - opt.min_lr)
 
 # -----------------------------------------------------------------------------
-def get_model_args(opt):
-    model_args = dict(
-        dim=opt.dim,
-        n_layers=opt.n_layers,
-        n_heads=opt.n_heads,
-        n_kv_heads=opt.n_kv_heads if opt.n_kv_heads > 0 else opt.n_heads,
-        vocab_size=opt.vocab_size,#64793,
-        multiple_of=opt.multiple_of,
-        max_seq_len=opt.max_seq_len,
-        use_bias=opt.use_bias,
-        dropout=opt.dropout,
-        flash_attention = False,
-        model_type = 'Model',
-    )  # start with model_args from command line
-
-    return model_args
 
 def configure_optimizers(model, weight_decay, learning_rate, betas, device_type, use_fused=True):
     # start with all of the candidate parameters
@@ -96,13 +77,10 @@ def configure_optimizers(model, weight_decay, learning_rate, betas, device_type,
 
 def init_model(opt):
     # model init
-    model_args=get_model_args(opt)
-
     if opt.init_from == "scratch":
         # init a new model from scratch
         print("Initializing a new model from scratch")
-        gptconf = ModelArgs(**model_args)
-        model = _get_model_architecture(gptconf.model_type)(gptconf)
+        model = _get_model_architecture(opt.model_type)(opt)
     elif opt.init_from == "resume":
         print(f"Resuming training from {opt.model_path}")
         # resume training from a checkpoint.
@@ -112,10 +90,9 @@ def init_model(opt):
         # force these config attributes to be equal otherwise we can't even resume training
         # the rest of the attributes (e.g. dropout) can stay as desired from command line
         for k in ["dim", "n_layers", "n_heads", "n_kv_heads", "vocab_size", "multiple_of", "max_seq_len"]:
-            model_args[k] = checkpoint_model_args[k]
+            opt[k] = checkpoint_model_args[k]
         # create the model
-        gptconf = ModelArgs(**model_args)
-        model = _get_model_architecture(gptconf.model_type)(gptconf)
+        model = _get_model_architecture(opt.model_type)(opt)
         state_dict = checkpoint["model"]
         # fix the keys of the state dictionary :(
         # honestly no idea how checkpoints sometimes get this prefix, have to debug more
@@ -127,6 +104,7 @@ def init_model(opt):
         iter_num = checkpoint["iter_num"]
         best_val_loss = checkpoint["best_val_loss"]
     return model
+
 
 def init_ddp(ddp, opt):
     print(f"====================prepear backend====================")
@@ -148,8 +126,8 @@ def init_ddp(ddp, opt):
         seed_offset = ddp_rank  # each process gets a different seed
         # world_size number of processes will be training simultaneously, so we can scale
         # down the desired gradient accumulation iterations per process proportionally
-        #assert gradient_accumulation_steps % ddp_world_size == 0
-        #gradient_accumulation_steps //= ddp_world_size
+        #assert grad_accum_steps % ddp_world_size == 0
+        #grad_accum_steps //= ddp_world_size
     else:
         # if not ddp, we are running on a single gpu, and one process
         master_process = True
@@ -157,10 +135,10 @@ def init_ddp(ddp, opt):
         ddp_world_size = 1
         ddp_local_rank=0
 
-    tokens_per_iter = opt.gradient_accumulation_steps * ddp_world_size * opt.batch_size * opt.max_seq_len
+    tokens_per_iter = opt.grad_accum_steps * ddp_world_size * opt.batch_size * opt.max_seq_len
     if master_process:
         print(f"tokens per iteration will be: {tokens_per_iter:,}")
-        print(f"breaks down as: {opt.gradient_accumulation_steps} \
+        print(f"breaks down as: {opt.grad_accum_steps} \
               grad accum steps * {ddp_world_size} processes * \
               {opt.batch_size} batch size * {opt.max_seq_len} max seq len")
 
@@ -222,101 +200,24 @@ def init_ddp(ddp, opt):
 #                          topology=topo,
 #                          base_seed=args.seed,)
 
-IGNORE_INDEX = -100
-PROMPT_FIELD = 'prompt'
-OUTPUT_FIELD = 'output'
-def _tokenize_fn(strings: Sequence[str], tokenizer: transformers.PreTrainedTokenizer) -> Dict:
-    """Tokenize a list of strings."""
-    # TODO: batch encode
-    tokenized_list = [
-        tokenizer(
-            text,
-            return_tensors="pt",
-            padding="max_length",
-            #padding="longest",
-            max_length=tokenizer.model_max_length,
-            truncation=True,
-        )
-        for text in strings
-    ]
-    input_ids = labels = [tokenized.input_ids[0] for tokenized in tokenized_list]
-    input_ids_lens = labels_lens = [
-        tokenized.input_ids.ne(tokenizer.pad_token_id).sum().item() for tokenized in tokenized_list
-    ]
-    return dict(
-        input_ids=input_ids,
-        labels=labels,
-        input_ids_lens=input_ids_lens,
-        labels_lens=labels_lens,
-    )
 
-def preprocess(
-    sources: Sequence[str],
-    targets: Sequence[str],
-    tokenizer: transformers.PreTrainedTokenizer,
-    mode: str
-) -> Dict:
-    """Preprocess the data by tokenizing."""
-    samples = [s + t for s, t in zip(sources, targets)]
-    samples_tokenized, sources_tokenized = [_tokenize_fn(strings, tokenizer) for strings in (samples, sources)]
-    input_ids = samples_tokenized["input_ids"]
-    # FIXME: sentencepiece case
-    if mode == "sft":
-        labels = copy.deepcopy(input_ids)
-        for label, source_len in zip(labels, sources_tokenized["input_ids_lens"]):
-            label[:source_len] = IGNORE_INDEX
-    elif mode == "pretrain":
-        labels = copy.deepcopy(input_ids)
-    else:
-        raise ValueError('Unvalid training mode.')
+@torch.no_grad()
+def valid_epoch(model, val_loader, opt, logger, ctx=None):
+    losses = []
+    model.eval()
+    for epoch in range(opt.max_epoch):
+        for _, (X, Y) in enumerate(val_loader):
+            X=X.to(opt.device)
+            Y=Y.to(opt.device)
+            if ctx is not None:
+                with ctx:
+                    _, loss, _ = model(X, Y)
+            else:
+                _, loss, _ = model(X, Y)
+            losses.append(loss.item())
+    model.train()
+    val_loss=np.mean(losses)
+    
+    logger.info('valid loss = {:.4f}'.format(val_loss))
 
-    # shift
-    return dict(
-        input_ids=[ids[: -1] for ids in input_ids],
-        labels=[lbs[1: ]for lbs in labels]
-    )
-
-class DataCollatorForDataset(object):
-    """Collate for supervised fine-tuning."""
-
-    mode: str
-
-    def get_attn_mask(self, input_ids):
-        """
-        Get triangular attention mask for a given sequence length / device.
-        """
-        bs = input_ids.shape[0]
-        seq_length = input_ids.shape[1]
-        # lower triangular attention mask
-        mask = torch.tril(torch.ones((bs, seq_length, seq_length))).view(
-            bs, 1, seq_length, seq_length
-        )
-        # convert to binary
-        return mask < 0.5
-
-    def get_position_ids(self, input_ids):
-        seq_length = input_ids.shape[1]
-        # Position ids.
-        position_ids = torch.arange(seq_length, dtype=torch.long)
-        return position_ids.unsqueeze(0).expand_as(input_ids)
-
-    def __call__(self, samples: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        sources = [sample[PROMPT_FIELD] for sample in samples]
-        targets = [sample[OUTPUT_FIELD] for sample in samples]
-
-        data_dict = preprocess(sources, targets, self.tokenizer, self.mode)
-        input_ids = data_dict["input_ids"]
-        labels = data_dict["labels"]
-
-        input_ids = torch.stack(input_ids)
-        labels = torch.stack(labels)
-        labels = torch.where(labels == self.tokenizer.pad_token_id, IGNORE_INDEX, labels)
-
-        return (
-            (
-                input_ids,
-                self.get_position_ids(input_ids),
-                self.get_attn_mask(input_ids),
-            ),
-            labels
-        )
+    return val_loss

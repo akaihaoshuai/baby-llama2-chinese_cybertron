@@ -6,30 +6,29 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from src.models.utils import ModelArgs
 from src.models.layers.position_code import precompute_freqs_cis
 from src.models.layers.layernorm import RMSNorm
 from src.models.layers.attention import Attention
 from src.models.layers.ffn import FeedForward
 
 
-class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: ModelArgs):
+class JerryTransformerBlock(nn.Module):
+    def __init__(self, layer_id: int, params):
         super().__init__()
-        self.n_heads = args.n_heads
-        self.dim = args.dim
-        self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args)
+        self.n_heads = params.n_heads
+        self.dim = params.dim
+        self.head_dim = params.dim // params.n_heads
+        self.attention = Attention(params)
         self.feed_forward = FeedForward(
-            dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            use_bias=args.use_bias,
-            dropout=args.dropout,
+            dim=params.dim,
+            hidden_dim=4 * params.dim,
+            multiple_of=params.multiple_of,
+            use_bias=params.use_bias,
+            dropout=params.dropout,
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.attention_norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.ffn_norm = RMSNorm(params.dim, eps=params.norm_eps)
 
     def forward(self, x, freqs_cos, freqs_sin):
         h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
@@ -37,8 +36,8 @@ class TransformerBlock(nn.Module):
         return out
 
 
-class Transformer(nn.Module):
-    def __init__(self, params: ModelArgs):
+class Jerry(nn.Module):
+    def __init__(self, params):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
@@ -47,16 +46,23 @@ class Transformer(nn.Module):
         # vocab_size = self.vocab_size
         vocab_size = ((params.vocab_size + 63) // 64) * 64
 
-        self.tok_embeddings = nn.Embedding(vocab_size, params.dim)
+        self.output = nn.Linear(params.dim, vocab_size, bias=params.use_bias)
+        if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
+            from src.loralib.layers import LoRAEmbedding
+            self.tok_embeddings = LoRAEmbedding(vocab_size, params.dim,
+                                                    r=params.lora_attn_dim,
+                                                    lora_alpha=params.lora_attn_alpha,
+                                                    merge_weights=False)
+        else:
+            self.tok_embeddings = nn.Embedding(vocab_size, params.dim)
+        
         self.dropout = nn.Dropout(params.dropout)
         self.layers = torch.nn.ModuleList()
         for layer_id in range(params.n_layers):
-            self.layers.append(TransformerBlock(layer_id, params))
+            self.layers.append(JerryTransformerBlock(layer_id, params))
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.output = nn.Linear(params.dim, vocab_size, bias=params.use_bias)
 
         # share the unembedding parameters with the embedding parameters
-        self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
 
         # some useful precompute for the RoPE relative positional embeddings
         # 这里提前分配超长数据
@@ -70,7 +76,6 @@ class Transformer(nn.Module):
         for pn, p in self.named_parameters():
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
-
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -119,7 +124,19 @@ class Transformer(nn.Module):
         nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
 
-        return len(decay_params1), num_decay_params1, len(decay_params2), num_decay_params2, num_nodecay_params
+        params_to_update = filter(lambda p: p.requires_grad, self.parameters())
+        num_params_to_update = sum(p.numel() for p in params_to_update)
+
+        tensor_n1, tensor_n2 = len(decay_params1), len(decay_params2)
+
+        print(f"=================models=================\n",self)
+        print(f"=================models:para=================\n",self.params)
+        print(f"[tok_embeddings]: num decayed parameter tensors: {tensor_n1}, with {num_decay_params1} parameters")
+        print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(self.layers)}, with {num_decay_params2}*{len(self.layers)} parameters")
+        print(f"num decayed parameter tensors: {num_decay_params1+num_decay_params2*len(self.layers)} parameters")
+        print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
+        print(f"\nnum need-updated parameter tensors {num_params_to_update} parameters")
+
 
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):

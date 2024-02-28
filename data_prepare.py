@@ -3,7 +3,7 @@ import glob
 import numpy as np
 from tokenizer_model import *
 import os
-from src.data_process import *
+from src.data.data_process import *
 
 BATCH_SIZE = 500000000
 tokenizer = ChatGLMTokenizer(vocab_file='./tokenizer_model/chatglm_tokenizer/tokenizer.model')
@@ -62,48 +62,59 @@ def process_data_v0(tokenizer):
 
 
 def process_data_v1():
-    save_all_text = True  # save_all_text_for_tokenizer
+    save_all_text = False  # save_all_text_for_tokenizer
 
-    # 这两个数据集太大了，不需要
-    print('process wikipedia.')
-    # process_wiki(tokenizer, BATCH_SIZE, save_all_text)
-    print('process_mnbvc.')
-    # process_MNBVC(tokenizer, BATCH_SIZE, save_all_text)
-
+    # 中
     print('process_CLUECorpusSmall.')
-    # process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text)
+    process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text)
 
-    print('process_C4.')
-    # process_C4(tokenizer, BATCH_SIZE, save_all_text)
+    print('process_wiki_zh_clean.')
+    process_wiki_zh_clean(tokenizer, BATCH_SIZE, save_all_text)
+    
+    print('process_baidu.')
+    process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
+
+    # 这个数据集很大
+    print('process_mnbvc.')
+    process_MNBVC(tokenizer, BATCH_SIZE, save_all_text)
 
     print('process_Chinese-medical-dialogue-data.')
-    # process_Chinese_medical_dialogue(tokenizer, BATCH_SIZE, save_all_text)
+    process_Chinese_medical_dialogue(tokenizer, BATCH_SIZE, save_all_text)
 
-    print('process_baidu.')
-    # process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
 
-    print('process wikipedia en.')
-    # process_wiki_en(tokenizer, BATCH_SIZE, save_all_text)
+    # 英
+    # 这个数据集很大
+    print('process wikipedia.')
+    process_wiki(tokenizer, BATCH_SIZE, save_all_text)
+
+    print('process_C4.')
+    process_C4(tokenizer, BATCH_SIZE, save_all_text)
+
+    # 代码
+    print('process github_code.')
+    process_github_code(tokenizer, BATCH_SIZE, save_all_text)
+    
 
     print('process_medical: medical_book_zh')
-    # process_medical('./data/medical_book_zh.json','book', tokenizer, save_all_text)
+    process_medical('./data/medical_book_zh.json','book', tokenizer, save_all_text)
     print('process_medical: train_encyclopedia')
-    # process_medical('./data/train_encyclopedia.json','encyclopedia', tokenizer,save_all_text)
+    process_medical('./data/train_encyclopedia.json','encyclopedia', tokenizer,save_all_text)
     print('process_medical_qa.')
-    # process_medical_qa(tokenizer, save_all_text)
+    process_medical_qa(tokenizer, save_all_text)
+
 
     collect_pretrain_data(GLOBAL_DATA_PATH)
 
     print('valid_medical.')
-    # process_valid_medical(tokenizer,save_all_text)
-    #
-    # if save_all_text:
-    #     print('test_medical.')
-    #     # 测试数据集不需要处理
-    #     process_test_medical(tokenizer, save_all_text)
-    #
-    # print('sft_process.')
-    # sft_process(save_all_text)
+    process_valid_medical(tokenizer,save_all_text)
+    
+    if save_all_text:
+        print('test_medical.')
+        # 测试数据集不需要处理
+        process_test_medical(tokenizer, save_all_text)
+    
+    print('sft_process.')
+    sft_process(save_all_text)
 
 
 if __name__=="__main__":

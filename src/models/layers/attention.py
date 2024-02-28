@@ -3,7 +3,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.models.utils import ModelArgs
 from src.models.layers.position_code import apply_rotary_emb
 
 
@@ -19,32 +18,63 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     )
 
 class Attention(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, params):
         super().__init__()
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
+        self.n_kv_heads = params.n_heads if params.n_kv_heads is None else params.n_kv_heads
         model_parallel_size = 1
-        self.n_local_heads = args.n_heads // model_parallel_size
+        self.n_local_heads = params.n_heads // model_parallel_size
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
-        self.head_dim = args.dim // args.n_heads
-        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=args.use_bias)
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=args.use_bias)
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=args.use_bias)
-        self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=args.use_bias)
-        self.attn_dropout = nn.Dropout(args.dropout)
-        self.resid_dropout = nn.Dropout(args.dropout)
-        self.dropout = args.dropout
-        self.flash_attention = args.flash_attention
+        self.head_dim = params.dim // params.n_heads
+        self.wo = nn.Linear(params.n_heads * self.head_dim, params.dim, bias=params.use_bias)
+        self.attn_dropout = nn.Dropout(params.dropout)
+        self.resid_dropout = nn.Dropout(params.dropout)
+        self.dropout = params.dropout
+        self.flash_attention = params.flash_attention
 
+        if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
+            from src.loralib.layers import LoRALinear
+            self.wq = LoRALinear(
+                params.dim, params.n_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+            self.wk = LoRALinear(
+                params.dim, self.n_kv_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+            self.wv = LoRALinear(
+                params.dim, self.n_kv_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+        else:
+            self.wq = nn.Linear(params.dim, params.n_heads * self.head_dim, bias=params.use_bias)
+            self.wk = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+            self.wv = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+        
+            
         if not self.flash_attention:
             # use flash attention or a manual implementation?
             self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
             if not self.flash:
                 print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-                mask = torch.full((1, 1, args.max_seq_len, args.max_seq_len), float("-inf"))
+                mask = torch.full((1, 1, params.max_seq_len, params.max_seq_len), float("-inf"))
                 mask = torch.triu(mask, diagonal=1)
                 self.register_buffer("mask", mask)
-
 
     def forward(
         self,
@@ -56,6 +86,7 @@ class Attention(nn.Module):
 
         # QKV
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)

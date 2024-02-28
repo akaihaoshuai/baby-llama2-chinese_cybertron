@@ -6,13 +6,12 @@ import json
 from contextlib import nullcontext
 import torch
 import pandas as pd
-from src.models.model import Transformer
-from src.models.utils import ModelArgs
+from src.models.Jerry import Jerry
 from tokenizer_model import ChatGLMTokenizer
 import numpy as np
-from setting import parser_args,parser_config
+from setting import *
+from src.utils import *
 from tqdm import tqdm
-from src.share import get_model_args
 
 def compute_bleu(labels, preds, weights=None):
     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -112,10 +111,10 @@ def eval_LongEval(model, model_path_name, tokenizer, opt, logger):
 
 def eval_perplexity(model,model_path_name,tokenizer,opt,ctx,logger):
     from src.eval.perplexity import Perplexity
-    ppl_results = Perplexity.compute('data/longEval', opt, model, tokenizer, model_path_name)
-    for key in ppl_results:
-        logger.info(f'model: {model_path_name}. [longEval Perplexity] [{key} ppl]: {ppl_results['perplexities'][key]}')
-    logger.info(f'model: {model_path_name}. [longEval Perplexity] mean_ppl: {ppl_results['mean_perplexity']}')
+    ppl_results, mean_perplexity = Perplexity.compute('data/longEval', opt, model, tokenizer, model_path_name)
+    for ppl_value in ppl_results:
+        logger.info(f'model: {model_path_name}. [longEval Perplexity] ppl: {ppl_value}')
+    logger.info(f'model: {model_path_name}. [longEval Perplexity] mean_ppl: {mean_perplexity}')
 
 
 def eval_GSM8K(model, model_path_name, tokenizer, opt, logger):
@@ -137,18 +136,19 @@ def eval(model_path_name,opt,logger):
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[opt.dtype]
     ctx = nullcontext() if device_type == 'cpu' else torch.cuda.amp.autocast()
 
-    # init from a model saved in a specific directory
-    state_dict = torch.load(model_path_name, map_location=opt.device)
-    
-    model_args = get_model_args(opt)
+    model_path, state_dict, lora_path, lora_state_dict = read_ckpt(model_path_name)
 
-    gptconf = ModelArgs(**model_args)
-    model = Transformer(gptconf)
+    if state_dict is None:
+        return
+    
+    opt.lora_path = lora_path
+    model = Jerry(opt) 
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-    model.load_state_dict(state_dict, strict=False)
+
+    load_weight(model, state_dict, lora_state_dict, strict=False)
 
     model.eval()
     model.to(opt.device)
@@ -159,13 +159,12 @@ def eval(model_path_name,opt,logger):
     # load the tokenizer
     tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
     
-
-    eval_perplexity(model, model_path_name, tokenizer, opt, ctx, logger)
     eval_medical(model, model_path_name, tokenizer, opt, ctx, logger)
     eval_ceval(model, model_path_name, tokenizer, opt, logger)
     eval_mmlu(model, model_path_name, tokenizer, opt, logger)
     eval_longbench(model, model_path_name, tokenizer, opt, logger)
     eval_LongEval(model, model_path_name, tokenizer, opt, logger)
+
     # eval_perplexity(model, model_path_name, tokenizer, opt, ctx, logger)
     # eval_GSM8K(model, model_path_name, tokenizer, opt, logger)
 
@@ -173,7 +172,7 @@ def eval(model_path_name,opt,logger):
 # I/O
 if __name__=="__main__":
     # -----------------------------------------------------------------------------
-    opt = parser_args()
+    opt = get_parser_args()
     # start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
     #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
     #exec(open('configurator.py').read()) # overrides from command line or config file
@@ -190,13 +189,12 @@ if __name__=="__main__":
 
         if os.path.isdir(model_path_):
             opt.config = os.path.join(model_path_, 'config.yaml')
-            opt,_ = parser_config(opt)
+            opt,_ = parser_model_config(opt)
 
             model_list = os.listdir(model_path_)
             for model_name in model_list:
-                model_n = os.path.join(model_path_, model_name)
+                eval_model_path_name = os.path.join(model_path_, model_name)
                 
-                if model_n.endswith('.pth'):
-                    eval_model_path_name = model_n #os.path.join(model_path_, 'best.pth')
+                if eval_model_path_name.endswith('.pth') or eval_model_path_name.endswith('.lora'):
                     print(f'*************eval model: {model_path_}*************')
                     eval(eval_model_path_name,opt,logger)

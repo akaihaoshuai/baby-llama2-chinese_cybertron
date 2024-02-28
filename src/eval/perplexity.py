@@ -102,7 +102,10 @@ class Perplexity(evaluate.Metric):
 
     def compute(self, data_path, opt, model, tokenizer, model_path_name, batch_size=4,
                 add_start_token = True, max_length = 1024):
-        # 暂时还不能用
+        
+        print('Not supported yet')
+        return [], 0
+    
         if device is not None:
             assert device in ["gpu", "cpu", "cuda"], "device should be either gpu or cpu."
             if device == "gpu":
@@ -186,4 +189,4 @@ class Perplexity(evaluate.Metric):
 
             ppls += perplexity_batch.tolist()
 
-        return {"perplexities": ppls, "mean_perplexity": np.mean(ppls)}
+        return ppls, np.mean(ppls)

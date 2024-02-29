@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 import yaml
 import json
+import math
 
 def get_parser_args():
     parser = ArgumentParser()
@@ -13,14 +14,17 @@ def get_parser_args():
     parser.add_argument("--out_dir", type=str, default='out', help="path to config")
     parser.add_argument("--model_path", type=str, default='best.pth', help="path to config")
     parser.add_argument("--lora_path", type=str, default='', help="")
-    
+    parser.add_argument("--max_seq_len", type=int, default=1024)
+
     # model param
     parser.add_argument("--dim", type=int, default=512)
     parser.add_argument("--n_layers", type=int, default=8)
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--n_kv_heads", type=int, default=0, help="0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA")
-    parser.add_argument("--max_seq_len", type=int, default=512)
     parser.add_argument("--multiple_of", type=int, default=32)
+    parser.add_argument("--rope_beta", type=float, default=1.0)
+    parser.add_argument("--rope_scaling_factor", type=float, default=1.0)
+    parser.add_argument("--rope_scaling_type", default="linear", choices=['linear', 'dynamic'])
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--use_bias", type=bool, default=False)
     parser.add_argument("--norm_eps", type=float, default=0.00001)
@@ -51,7 +55,7 @@ def get_parser_args():
 
     # fine_tuning params
     parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
-    parser.add_argument('--lora_mudule', type=str, default="linear", choices=['linear', 'embedding', 'all'])
+    parser.add_argument('--lora_mudule', type=str, default="all", choices=['linear', 'embedding', 'all'])
     parser.add_argument("--lora_attn_dim", type=int, default=8)
     parser.add_argument("--lora_attn_alpha", type=int, default=128)
     parser.add_argument("--lora_dropout", type=float, default=0.0)
@@ -81,23 +85,16 @@ def parser_model_config(opt):
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.Loader)
     
-    dataset_params_yaml = config.get('dataset_params')
-    if None != dataset_params_yaml:
-        opt.train_data_path = dataset_params_yaml.get('train_data_path', opt.train_data_path)
-        opt.valid_data_path = dataset_params_yaml.get('valid_data_path', opt.valid_data_path)
-        opt.sft_data_path = dataset_params_yaml.get('sft_data_path', opt.sft_data_path)
-        opt.test_data_path = dataset_params_yaml.get('test_data_path', opt.test_data_path)
-    
-    opt.model_path = config.get('model_path',opt.model_path)
-
     model_params_yaml = config.get('model_params')
     if None != model_params_yaml:
         opt.dim = model_params_yaml.get('dim', opt.dim)
         opt.n_layers = model_params_yaml.get('n_layers', opt.n_layers)
         opt.n_heads = model_params_yaml.get('n_heads', opt.n_heads)
         opt.n_kv_heads = model_params_yaml.get('n_kv_heads', opt.n_kv_heads)
-        opt.max_seq_len = model_params_yaml.get('max_seq_len', opt.max_seq_len)
         opt.multiple_of = model_params_yaml.get('multiple_of', opt.multiple_of)
+        opt.rope_beta = model_params_yaml.get('rope_beta', opt.rope_beta)
+        opt.rope_scaling_factor = model_params_yaml.get('rope_scaling_factor', opt.rope_scaling_factor)
+        opt.rope_scaling_type = model_params_yaml.get('rope_scaling_type', opt.rope_scaling_type)
         opt.dropout = model_params_yaml.get('dropout', opt.dropout)
         opt.norm_eps = model_params_yaml.get('norm_eps', opt.norm_eps)
         opt.use_bias = model_params_yaml.get('use_bias', opt.use_bias)
@@ -106,6 +103,22 @@ def parser_model_config(opt):
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)
         opt.model_type = model_params_yaml.get('model_type', opt.model_type)
+
+    return opt,config
+
+def parser_other_config_except_model(opt):
+    with open(opt.config) as f:
+        config = yaml.load(f, Loader=yaml.Loader)
+    
+    dataset_params_yaml = config.get('dataset_params')
+    if None != dataset_params_yaml:
+        opt.train_data_path = dataset_params_yaml.get('train_data_path', opt.train_data_path)
+        opt.valid_data_path = dataset_params_yaml.get('valid_data_path', opt.valid_data_path)
+        opt.sft_data_path = dataset_params_yaml.get('sft_data_path', opt.sft_data_path)
+        opt.test_data_path = dataset_params_yaml.get('test_data_path', opt.test_data_path)
+    
+    opt.model_path = config.get('model_path',opt.model_path)
+    opt.max_seq_len = config.get('max_seq_len', opt.max_seq_len)
 
     # train
     train_params_yaml = config.get('train_params')
@@ -153,7 +166,6 @@ def parser_model_config(opt):
 
     return opt,config
 
-
 def set_fine_tuning_paras_to_config(opt, config):
     fine_tuning_params = dict()
     fine_tuning_params['ft_type'] = opt.ft_type
@@ -163,6 +175,19 @@ def set_fine_tuning_paras_to_config(opt, config):
     fine_tuning_params['lora_dropout'] = opt.lora_dropout
     fine_tuning_params['lora_r_dropout'] = opt.lora_r_dropout
     config['fine_tuning_params'] = fine_tuning_params
+
+    ori_max_seq_len = config['max_seq_len']
+    model_params_yaml = config.get('model_params')
+    if None != model_params_yaml:
+        orig_rope_scaling_factor = model_params_yaml.get('rope_scaling_factor', 1.0)
+    else:
+        orig_rope_scaling_factor = 1.0
+
+    if ori_max_seq_len:
+        ori_max_seq_len *= orig_rope_scaling_factor
+        if opt.max_seq_len > ori_max_seq_len:
+            scaling_factor = float(math.ceil(opt.max_seq_len / ori_max_seq_len))
+            opt.rope_scaling_factor = scaling_factor
 
 
 def read_deepspeed_config(opt):

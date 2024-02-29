@@ -18,13 +18,16 @@ dataset_params:
     ]
 
 model_path: 'best.model'
+max_seq_len: 1024
 model_params:
   dim: 1024
   n_layers: 28
   n_heads: 16        # 要能被dim整除
   n_kv_heads: 8      # 0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA
-  max_seq_len: 1024
   multiple_of: 32
+  rope_beta: 10000.0
+  rope_scaling_factor: 1.0
+  rope_scaling_type: 'linear'  # linear/dynamic
   dropout: 0.0
   norm_eps: 0.00001
   use_bias: False
@@ -58,8 +61,8 @@ train_params:
   compile: False
 
 fine_tuning_params:
-  ft_type: 'full_ft'     # full_ft/lora/qlora 
-  lora_mudule: 'linear'  # linear/embedding/all
+  ft_type: 'full_ft'  # full_ft/lora/qlora 
+  lora_mudule: 'all'  # linear/embedding/all
   lora_attn_dim: 8
   lora_attn_alpha: 128
   lora_dropout: 0.0

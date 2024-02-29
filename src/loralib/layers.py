@@ -116,7 +116,7 @@ class LoRALinear(nn.Linear, LoRALayer):
         else:
             self.lora_A = self.lora_B = None
 
-        self.reset_parameters()
+        self.reset_parameters()  # lora权重必须初始化为0
         if fan_in_fan_out:
             self.weight.data = self.weight.data.transpose(0, 1)
 

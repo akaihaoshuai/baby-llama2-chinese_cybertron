@@ -100,7 +100,7 @@ def ft_model(opt):
         prefix = "_orig_mod." if opt.compile else ""
         model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
         model = DDP(model, device_ids=[ddp_local_rank])
-        #
+        
     
     #-----init dataloader------
     tokenizer = ChatGLMTokenizer(vocab_file=opt.vocab_file)
@@ -161,6 +161,7 @@ def ft_model(opt):
 # I/O
 if __name__=="__main__":
     opt = get_parser_args()
+    src_batch_size = opt.batch_size
     
     # 遍历out目录下的所有pretrain文件夹,全部sft处理
     pretrain_list = os.listdir(opt.out_dir)
@@ -168,13 +169,17 @@ if __name__=="__main__":
         model_path = os.path.join(opt.out_dir, pretrain_model)
         if 'pretrain' in model_path and os.path.isdir(model_path):
             opt.config = os.path.join(model_path, 'config.yaml')
-            opt,config = parser_model_config(opt, is_train=False)
+            opt,config = parser_model_config(opt)
+            set_fine_tuning_paras_to_config(opt, config)
 
             if opt.ft_type == 'lora':
                 save_dir =model_path.replace('pretrain', 'lora_ft_ds')
             else:
                 save_dir =model_path.replace('pretrain', 'fft_ds')
             
+            save_dir =save_dir.replace(f'bs{opt.batch_size}', f'bs{src_batch_size}')
+            opt.batch_size = src_batch_size
+
             if not os.path.exists(save_dir): os.makedirs(save_dir)
 
             # 保存一份参数
@@ -204,5 +209,4 @@ if __name__=="__main__":
                     # exec(open("configurator.py").read())  # overrides from command line or config file
                     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
                     # -----------------------------------------------------------------------------
-                    opt.batch_size = 2
                     ft_model(opt)

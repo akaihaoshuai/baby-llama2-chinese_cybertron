@@ -56,8 +56,15 @@ def configure_optimizers(model, weight_decay, learning_rate, betas, device_type,
     # param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
     # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
     # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-    decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+    decay_params = [p for n, p in param_dict.items() if (p.dim() >= 2 and p.requires_grad)]
+    nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2 or p.requires_grad==False]
+
+    num_decay_params = sum(p.numel() for p in decay_params)
+    num_nodecay_params = sum(p.numel() for p in nodecay_params)
+    print(f"[optimizers] num decayed parameter tensors: {num_decay_params} parameters")
+    print(f"[optimizers] num non-decayed parameter tensors {num_nodecay_params} parameters")
+    
+
     optim_groups = [
         {'params': decay_params, 'weight_decay': weight_decay},
         {'params': nodecay_params, 'weight_decay': 0.0}

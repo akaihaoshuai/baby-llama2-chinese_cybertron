@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from src.models.layers.position_code import precompute_freqs_cis
 from src.models.layers.layernorm import RMSNorm
 from src.models.layers.attention import Attention
 from src.models.layers.ffn import FeedForward
@@ -30,8 +29,8 @@ class JerryTransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.ffn_norm = RMSNorm(params.dim, eps=params.norm_eps)
 
-    def forward(self, x, freqs_cos, freqs_sin):
-        h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
+    def forward(self, x, position_ids):
+        h = x + self.attention.forward(self.attention_norm(x), position_ids)
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
@@ -50,9 +49,9 @@ class Jerry(nn.Module):
         if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRAEmbedding
             self.tok_embeddings = LoRAEmbedding(vocab_size, params.dim,
-                                                    r=params.lora_attn_dim,
-                                                    lora_alpha=params.lora_attn_alpha,
-                                                    merge_weights=False)
+                                                r=params.lora_attn_dim,
+                                                lora_alpha=params.lora_attn_alpha,
+                                                merge_weights=False)
         else:
             self.tok_embeddings = nn.Embedding(vocab_size, params.dim)
         
@@ -61,14 +60,6 @@ class Jerry(nn.Module):
         for layer_id in range(params.n_layers):
             self.layers.append(JerryTransformerBlock(layer_id, params))
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-
-        # share the unembedding parameters with the embedding parameters
-
-        # some useful precompute for the RoPE relative positional embeddings
-        # 这里提前分配超长数据
-        freqs_cos, freqs_sin = precompute_freqs_cis(self.params.dim // self.params.n_heads, self.params.max_seq_len*8192)
-        self.register_buffer("freqs_cos", freqs_cos, persistent=False)
-        self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
         # init all weights
         self.apply(self._init_weights)
@@ -90,11 +81,11 @@ class Jerry(nn.Module):
         h = self.tok_embeddings(tokens)
 
         h = self.dropout(h)
-        freqs_cos = self.freqs_cos[:seqlen]
-        freqs_sin = self.freqs_sin[:seqlen]
+        position_ids = torch.arange(seqlen, dtype=torch.long, device=tokens.device)
+        position_ids = position_ids.unsqueeze(0)
 
         for layer in self.layers:
-            h = layer(h, freqs_cos, freqs_sin)
+            h = layer(h, position_ids)
         h = self.norm(h)
 
         if targets is not None:
@@ -113,15 +104,15 @@ class Jerry(nn.Module):
 
     def print_params(self):
         param_dict = {pn: p for pn, p in self.tok_embeddings.named_parameters()}
-        decay_params1 = [p for n, p in param_dict.items() if p.dim() >= 2]
+        decay_params1 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
         num_decay_params1 = sum(p.numel() for p in decay_params1)
 
         param_dict = {pn: p for pn, p in self.layers[0].named_parameters()}
-        decay_params2 = [p for n, p in param_dict.items() if p.dim() >= 2]
+        decay_params2 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
         num_decay_params2 = sum(p.numel() for p in decay_params2)
 
         param_dict = {pn: p for pn, p in self.named_parameters()}
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2 or p.requires_grad==False]
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
 
         params_to_update = filter(lambda p: p.requires_grad, self.parameters())
@@ -157,7 +148,7 @@ class Jerry(nn.Module):
 
     #@torch.inference_mode()
     @torch.no_grad()
-    def generate(self, idx, eos, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, idx, eos=2, max_new_tokens=1024, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.

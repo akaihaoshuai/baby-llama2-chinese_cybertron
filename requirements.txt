@@ -8,4 +8,9 @@ tqdm==4.64.1
 jieba
 pandas
 transformers
-evaluate
+fuzzywuzzy
+rouge
+jsonlines
+fschat
+nltk
+mpi4py

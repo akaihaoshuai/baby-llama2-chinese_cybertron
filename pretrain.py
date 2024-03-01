@@ -141,15 +141,11 @@ def pretrain_model(opt):
 
     #-----init dataloader------
     train_ds = PretrainDataset(opt.train_data_path, max_length=opt.max_seq_len,memmap=True,use_print=master_process)
-    print(f"==================== 1 ====================")
     val_ds = PretrainDataset(opt.valid_data_path, max_length=opt.max_seq_len,memmap=True,use_print=master_process)
-    print(f"==================== 2 ====================")
     if ddp:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
     else:
         train_sampler = None
-
-    print(f"====================create DataLoader====================")
 
     train_loader = torch.utils.data.DataLoader(
         train_ds,
@@ -209,7 +205,7 @@ if __name__=="__main__":
         opt.config = 'config/config_ds.yaml'
     else:
         opt.config = 'config/config.yaml'
-    opt,config = parser_model_config(opt)
+    opt, config = parser_all_config(opt)
 
     # -----------------------------------------------------------------------------
     config_keys = [
@@ -221,7 +217,7 @@ if __name__=="__main__":
     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
     # -----------------------------------------------------------------------------
 
-    save_name=f'pretrain_layer{opt.n_layers}_seqlen{opt.max_seq_len}_dim{opt.dim}_bs{opt.batch_size}_accum{opt.grad_accum_steps}_h{opt.n_heads}_hkv{opt.n_kv_heads}'
+    save_name=f'pretrain_layer{opt.n_layers}_seqlen{opt.max_seq_len}_dim{opt.dim}_accum{opt.grad_accum_steps}_h{opt.n_heads}_hkv{opt.n_kv_heads}'
     save_dir =os.path.join(opt.out_dir , save_name)
     os.makedirs(opt.out_dir, exist_ok=True)
     if not os.path.exists(save_dir): 

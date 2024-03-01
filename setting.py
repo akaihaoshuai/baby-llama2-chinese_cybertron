@@ -90,6 +90,12 @@ def get_parser_args():
 
     return parser.parse_args()
 
+
+def parser_all_config(opt):
+    opt, _ = parser_model_config(opt)
+    opt, config = parser_other_config_except_model(opt)
+    return opt, config
+
 def parser_model_config(opt):
     with open(opt.config) as f:
         config = yaml.load(f, Loader=yaml.Loader)

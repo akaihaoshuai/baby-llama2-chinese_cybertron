@@ -186,7 +186,7 @@ def pretrain_model(opt):
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
             
             if master_process:  #一般用0，当然，可以选任意的rank保存。
-                save_model(model, '{}/best.pth'.format(save_dir))
+                save_model(model, '{}/best.pth'.format(save_dir), opt.merge_lora_to_save)
 
             # client_sd=dict()
             # client_sd['step'] = epoch
@@ -194,7 +194,7 @@ def pretrain_model(opt):
             # model_opt.save_checkpoint('{}/best.pth'.format(save_dir), ckpt_id, client_sd = client_sd)
 
         if master_process:  #一般用0，当然，可以选任意的rank保存。
-            save_model(model, '{}/epoch_{}.pth'.format(save_dir,epoch))
+            save_model(model, '{}/epoch_{}.pth'.format(save_dir,epoch), opt.merge_lora_to_save)
         # model_opt.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
     
     if ddp:

@@ -34,6 +34,9 @@ def get_parser_args():
     parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
     parser.add_argument('--model_type', type=str, default="Model", choices=['Model'])
     
+    parser.add_argument('--merge_lora_to_save', type=bool, default=False, help="merge_lora_to_save")
+    parser.add_argument('--merge_lora_on_load', type=bool, default=False, help="merge_lora_on_load")
+
     # train params
     parser.add_argument("--use_deepspeed", type=bool, default=False)
     parser.add_argument("--max_epoch", type=int, default=2)
@@ -120,6 +123,8 @@ def parser_other_config_except_model(opt):
     
     opt.model_path = config.get('model_path',opt.model_path)
     opt.max_seq_len = config.get('max_seq_len', opt.max_seq_len)
+    opt.merge_lora_to_save = config.get('merge_lora_to_save', opt.merge_lora_to_save)
+    opt.merge_lora_on_load = config.get('merge_lora_on_load', opt.merge_lora_on_load)
 
     # train
     train_params_yaml = config.get('train_params')

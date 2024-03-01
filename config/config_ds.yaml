@@ -20,6 +20,9 @@ dataset_params:
 
 model_path: 'best.model'
 max_seq_len: 1024
+merge_lora_to_save: False
+merge_lora_on_load: False
+
 model_params:
   dim: 1024
   n_layers: 28
@@ -68,7 +71,6 @@ fine_tuning_params:
   lora_attn_alpha: 128
   lora_dropout: 0.0
   lora_r_dropout: 0.0
-
 
 eval_params:
   max_new_tokens: 100

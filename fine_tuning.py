@@ -185,7 +185,7 @@ def ft_model(opt):
     print(f"====================sft_epoch====================")
 
     model_save_type = 'lora' if opt.ft_type =='lora' else 'all'
-     
+    
     # sft loop
     best_val_loss = 0.0
     val_loss = 0.0
@@ -201,11 +201,11 @@ def ft_model(opt):
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
             if master_process:  #一般用0，当然，可以选任意的rank保存。
                 save_path = '{}/pretrain_{}_ft_best_{}.pth'.format(save_dir,model_name.split('.')[0], epoch)
-                save_model(model, save_path, model_save_type)
+                save_model(model, save_path, model_save_type, opt.merge_lora_to_save)
 
         if master_process:  #一般用0，当然，可以选任意的rank保存。
             save_path = '{}/pretrain_{}_ft_epoch_{}.pth'.format(save_dir,model_name.split('.')[0],epoch)
-            save_model(model, save_path, model_save_type)
+            save_model(model, save_path, model_save_type, opt.merge_lora_to_save)
 
     if ddp:
         destroy_process_group()

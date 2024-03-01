@@ -4,7 +4,6 @@ import torch
 import pandas as pd
 import os
 
-
 def check_is_processed(target_name, data_path):
     data_path_list = os.listdir(data_path)
     for data_name in data_path_list:
@@ -51,35 +50,44 @@ def read_ckpt(model_path_name, lora_path=''):
     return model_path, state_dict, lora_path, lora_state_dict
     
 
-def load_weight(model, state_dict, lora_state_dict=None, strict=True):
+def load_weight(model, state_dict, lora_state_dict=None, merge_lora_on_load=False, strict=True):
     # 从预训练权重中更新模型参数
     if model.params.ft_type == 'lora' or model.params.lora_path != '':
         model_dict = model.state_dict()
         for name, param in state_dict.items():
-            if 'wq.weight' in name:
+            if model_dict[name].shape == param.shape:
                 model_dict[name].copy_(param)
-            elif 'wk.weight' in name:
+            elif model_dict[name].shape == param.T.shape:
                 model_dict[name].copy_(param.T)
-            elif 'wv.weight' in name:
-                model_dict[name].copy_(param.T)
-            elif 'tok_embeddings.weight' in name:
-                model_dict[name].copy_(param)
             else:
-                model_dict[name].copy_(param)
+                print('load_weight shape error.')
+                return
 
         if lora_state_dict is not None:
-            for name, param in lora_state_dict.items():
-                model_dict[name].copy_(param)
+            if merge_lora_on_load:
+                from src.loralib.utils import merge_lora_on_load_func
+                merge_lora_on_load_func(model, lora_state_dict)
+            else:
+                for name, param in lora_state_dict.items():
+                    model_dict[name].copy_(param)
     else:
         model.load_state_dict(state_dict, strict)
 
 
-def save_model(model, path, save_type='all'):
-    if save_type == 'all':
+def save_model(model, path, save_type='all', merge_lora=False):
+    if merge_lora:
+        from src.loralib.utils import merge_lora_to_save_func
+        merge_lora_to_save_func(model, path)
         torch.save(model.state_dict(), path)
-    elif save_type == 'lora':
-        model_state_dict = model.state_dict()
-        lora_only = {k: model_state_dict[k] for k in model_state_dict if 'lora_' in k}
-        torch.save(lora_only, path.replace('.pth', '.lora'))
     else:
-        torch.save(model.state_dict(), path)
+        if save_type == 'all':
+            model_state_dict = model.state_dict()
+            state_dict = {k: model_state_dict[k] for k in model_state_dict if model_state_dict[k] is not None}
+            torch.save(state_dict, path)
+        elif save_type == 'lora':
+            model_state_dict = model.state_dict()
+            lora_only = {k: model_state_dict[k] for k in model_state_dict if 'lora_' in k and model_state_dict[k] is not None}
+            torch.save(lora_only, path.replace('.pth', '.lora'))
+        else:
+            state_dict = {k: model_state_dict[k] for k in model_state_dict if model_state_dict[k] is not None}
+            torch.save(state_dict, path)

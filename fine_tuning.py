@@ -238,7 +238,6 @@ if __name__=="__main__":
                     save_dir = model_path.replace('pretrain', 'ft_full')
 
 
-
             if os.path.exists(os.path.join(model_path, 'config.yaml')):
                 opt.config = os.path.join(model_path, 'config.yaml')
             else:

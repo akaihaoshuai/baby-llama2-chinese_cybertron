@@ -141,7 +141,7 @@ def eval(model_path_name,opt,logger):
         return
     
     opt.lora_path = lora_path
-    model = Jerry(opt) 
+    model = Jerry(opt)
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -157,10 +157,6 @@ def eval(model_path_name,opt,logger):
 
     # load the tokenizer
     tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
-    
-    x=tokenizer.encode('你好',add_special_tokens=False)
-    x = (torch.tensor(x, dtype=torch.long, device=opt.device)[None, ...])
-    y = model.generate(x)
 
     eval_medical(model, model_path_name, tokenizer, opt, ctx, logger)
     eval_ceval(model, model_path_name, tokenizer, opt, logger)
@@ -202,7 +198,6 @@ if __name__=="__main__":
             for model_name in model_list:
                 eval_model_path_name = os.path.join(model_path_, model_name)
                 
-                # if eval_model_path_name.endswith('.pth') or eval_model_path_name.endswith('.lora'):
-                if eval_model_path_name.endswith('.lora'):
+                if eval_model_path_name.endswith('.pth') or eval_model_path_name.endswith('.lora'):
                     print(f'*************eval model: {model_path_}*************')
                     eval(eval_model_path_name,opt,logger)

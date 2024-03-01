@@ -34,11 +34,6 @@ class Attention(nn.Module):
         self.dropout = params.dropout
         self.flash_attention = params.flash_attention
 
-        self.rope_beta = params.rope_beta
-        self.max_position_embeddings = params.max_seq_len
-        self.rope_scaling_factor = params.rope_scaling_factor
-        self.rope_scaling_type = params.rope_scaling_type
-
         if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRALinear
             self.wq = LoRALinear(
@@ -82,37 +77,11 @@ class Attention(nn.Module):
                 mask = torch.triu(mask, diagonal=1)
                 self.register_buffer("mask", mask)
 
-        self._init_rope()
 
-
-    def _init_rope(self):
-        if self.rope_scaling_factor <= 1.0:
-            self.rotary_emb = RotaryEmbedding(
-                self.head_dim,
-                max_position_embeddings=self.max_position_embeddings,
-                base=self.rope_beta,
-            )
-        else:
-            if self.rope_scaling_type == "linear":
-                self.rotary_emb = LinearScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=self.rope_scaling_factor,
-                    base=self.rope_beta,
-                )
-            elif self.rope_scaling_type == "dynamic":
-                self.rotary_emb = DynamicNTKScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=self.rope_scaling_factor,
-                    base=self.rope_beta,
-                )
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {self.rope_scaling_type}")
-            
     def forward(
         self,
         x: torch.Tensor,
+        freq_cos, freq_sin,
         position_ids: torch.Tensor,
         past_key_value: Optional[torch.Tensor] = None,
     ):
@@ -126,11 +95,10 @@ class Attention(nn.Module):
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim).transpose(1, 2)
 
         # RoPE relative positional embeddings
-        cos, sin = self.rotary_emb(xv, seq_len=xv.shape[-2])
-        xq, xk = apply_rotary_pos_emb(xq, xk, cos, sin, position_ids)
+        xq, xk = apply_rotary_pos_emb(xq, xk, freq_cos, freq_sin, position_ids)
 
         if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            cache_kwargs = {"sin": freq_cos, "cos": freq_sin}  # Specific to RoPE models
             xk, xv = past_key_value.update(xk, xv, self.layer_idx, cache_kwargs)
 
         # grouped multiquery attention: expand out keys and values

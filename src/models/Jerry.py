@@ -9,6 +9,7 @@ from torch import nn
 from src.models.layers.layernorm import RMSNorm
 from src.models.layers.attention import Attention
 from src.models.layers.ffn import FeedForward
+from src.models.layers.position_code import *
 
 
 class JerryTransformerBlock(nn.Module):
@@ -29,8 +30,8 @@ class JerryTransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.ffn_norm = RMSNorm(params.dim, eps=params.norm_eps)
 
-    def forward(self, x, position_ids):
-        h = x + self.attention.forward(self.attention_norm(x), position_ids)
+    def forward(self, x, freq_cos, freq_sin, position_ids):
+        h = x + self.attention.forward(self.attention_norm(x), freq_cos, freq_sin, position_ids)
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
@@ -41,7 +42,12 @@ class Jerry(nn.Module):
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
-        
+        self.rope_beta = params.rope_beta
+        self.max_position_embeddings = params.max_seq_len
+        self.rope_scaling_factor = params.rope_scaling_factor
+        self.rope_scaling_type = params.rope_scaling_type
+        self.head_dim = params.dim // params.n_heads
+
         # vocab_size = self.vocab_size
         vocab_size = ((params.vocab_size + 63) // 64) * 64
 
@@ -61,6 +67,8 @@ class Jerry(nn.Module):
             self.layers.append(JerryTransformerBlock(layer_id, params))
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
 
+        self._init_rope(params)
+
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
@@ -68,6 +76,31 @@ class Jerry(nn.Module):
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
 
+    def _init_rope(self, params):
+        if self.rope_scaling_factor <= 1.0:
+            self.rotary_emb = RotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_beta,
+            )
+        else:
+            if self.rope_scaling_type == "linear":
+                self.rotary_emb = LinearScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            elif self.rope_scaling_type == "dynamic":
+                self.rotary_emb = DynamicNTKScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {self.rope_scaling_type}")
+            
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -83,9 +116,10 @@ class Jerry(nn.Module):
         h = self.dropout(h)
         position_ids = torch.arange(seqlen, dtype=torch.long, device=tokens.device)
         position_ids = position_ids.unsqueeze(0)
+        freq_cos, freq_sin = self.rotary_emb(h, seq_len=h.shape[1])
 
         for layer in self.layers:
-            h = layer(h, position_ids)
+            h = layer(h, freq_cos, freq_sin, position_ids)
         h = self.norm(h)
 
         if targets is not None:
@@ -148,7 +182,10 @@ class Jerry(nn.Module):
 
     #@torch.inference_mode()
     @torch.no_grad()
-    def generate(self, idx, eos=2, max_new_tokens=1024, temperature=1.0, top_k=None):
+    def generate(self, idx, eos=2, max_new_tokens=1024, 
+                 temperature=1.0, 
+                 top_k=None,
+                 top_p=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.

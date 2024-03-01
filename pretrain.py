@@ -50,8 +50,7 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             # backward pass, with gradient scaling if training in fp16
             scaler.scale(loss).backward()
-            tr_loss = loss.item() * opt.grad_accum_steps
-        
+            loss = loss.item() * opt.grad_accum_steps
         
             if((step+1) % opt.grad_accum_steps)==0:
                 # clip the gradient
@@ -79,7 +78,7 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
                         opt.max_epoch, 
                         step, 
                         iter_per_epoch,
-                        tr_loss, 
+                        loss, 
                         lr,
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
         
@@ -115,6 +114,7 @@ def pretrain_model(opt):
             optimizer=optimizer,
             model_parameters=filter(lambda p: p.requires_grad, model.parameters()),
         )
+        scaler = None
     else:
         # initialize a GradScaler. If enabled=False scaler is a no-op
         # 混合精度训练、在内存中用FP16做储存和乘法从而加速计算，而用FP32做累加避免舍入误差。
@@ -141,7 +141,9 @@ def pretrain_model(opt):
 
     #-----init dataloader------
     train_ds = PretrainDataset(opt.train_data_path, max_length=opt.max_seq_len,memmap=True,use_print=master_process)
-    val_ds = PretrainDataset(opt.valid_data_path, max_length=opt.max_seq_len,use_print=master_process)
+    print(f"==================== 1 ====================")
+    val_ds = PretrainDataset(opt.valid_data_path, max_length=opt.max_seq_len,memmap=True,use_print=master_process)
+    print(f"==================== 2 ====================")
     if ddp:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
     else:

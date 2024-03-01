@@ -1,5 +1,4 @@
 dataset_params:
-  max_seq_len: 1024
   train_data_path: [
         './data/pretrain_data.bin'
         #'./data/baidubaike_563w.bin',

@@ -76,5 +76,6 @@ eval_params:
   max_new_tokens: 100
   temperature: 1.0
   top_k: 30
+  top_p: 0.4
   seed: 1337
   shot: 0

@@ -78,8 +78,13 @@ def get_parser_args():
     parser.add_argument("--max_new_tokens", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=30)
+    parser.add_argument("--top_p", type=float, default=0.4)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--shot", type=int, default=0, help='zero shot')
+
+    # demo
+    parser.add_argument("--host", type=str, default="localhost")
+    parser.add_argument("--port", type=int, default=8898)
 
     parser.add_argument("--use_tensorboard", type=bool, default=True)
 
@@ -167,6 +172,7 @@ def parser_other_config_except_model(opt):
         opt.max_new_tokens = eval_params_yaml.get('max_new_tokens', opt.max_new_tokens)
         opt.temperature = eval_params_yaml.get('temperature', opt.temperature)
         opt.top_k = eval_params_yaml.get('top_k', opt.top_k)
+        opt.top_p = eval_params_yaml.get('top_p', opt.top_p)
         opt.seed = eval_params_yaml.get('seed', opt.seed)
         opt.shot = eval_params_yaml.get('shot', opt.shot)
 

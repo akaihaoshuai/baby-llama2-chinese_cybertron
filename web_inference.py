@@ -3,34 +3,19 @@ import sys
 import math
 import torch
 import argparse
-import textwrap
-import transformers
-from peft import PeftModel
-from transformers import GenerationConfig, TextIteratorStreamer
+from transformers import TextIteratorStreamer
 from threading import Thread
 import gradio as gr
 from src.utils import *
 from setting import *
 
-def parse_config():
-    parser = argparse.ArgumentParser(description='arg parser')
-    parser.add_argument("--model_path", type=str, default='best.pth', help="path to model")
-    parser.add_argument("--config_path", type=str, default='config.yaml', help="path to config")
-    parser.add_argument("--prompt", type=str, default='你好。', help="path to config")
-    parser.add_argument("--max_new_tokens", type=int, default=1024, help="path to config")
-    parser.add_argument("--temperature", type=float, default=1.0, help="path to config")
-    parser.add_argument("--top_k", type=float, default=5, help="path to config")
-    parser.add_argument("--device", type=str, default='cuda', help="path to config")
-    parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
-
-    args = parser.parse_args()
-    return args
 
 title = "baby-llama2-chinese for Long-context LLMs"
 
 description = """
 <font size=4>
-This is the online demo of LongLoRA. \n
+This is the online demo of baby-llama2-chinese. \n
+github: https://github.com/akaihaoshuai/baby-llama2-chinese_fix \n
 If multiple users are using it at the same time, they will enter a queue, which may delay some time. \n
 **Inputs**: <br>
 - **Input material txt** and **Question** are required. <br>
@@ -45,13 +30,6 @@ If multiple users are using it at the same time, they will enter a queue, which 
 &ensp; What is the main contribution of this paper? <br>
 Hope you can enjoy our work!
 </font>
-"""
-
-# Gradio
-article = """
-<p style='baby-llama2-chinese'>
-<a href='https://github.com/akaihaoshuai/baby-llama2-chinese_fix' target='_blank'>
-</a>
 """
 
 PROMPT_DICT = {
@@ -77,7 +55,7 @@ def read_txt_file(material_txt):
     return content
 
 def build_generator(
-    model, tokenizer, temperature=0.6, top_p=0.9, max_gen_len=4096, use_cache=True
+    model, tokenizer, temperature=0.6, top_p=0.9, max_new_tokens=4096, use_cache=True
 ):
     def response(material, question):
         if material is None:
@@ -98,7 +76,7 @@ def build_generator(
         
         streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
         generate_kwargs = dict(**inputs,
-            max_new_tokens=max_gen_len,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
             use_cache=use_cache,
@@ -116,7 +94,7 @@ def build_generator(
 
     return response
 
-def main(args):
+def main(opt):
     # if args.flash_attn:
     #     replace_llama_attn(inference=True)
     from inference import get_model
@@ -128,8 +106,8 @@ def main(args):
     opt, config = parser_model_config(opt)
 
     orig_ctx_len = getattr(config, "max_seq_len", None)
-    if orig_ctx_len and args.max_new_tokens > orig_ctx_len:
-        opt.rope_scaling_factor = float(math.ceil(args.max_new_tokens / orig_ctx_len))
+    if orig_ctx_len and opt.max_new_tokens > orig_ctx_len:
+        opt.rope_scaling_factor = float(math.ceil(opt.max_new_tokens / orig_ctx_len))
         opt.rope_scaling_type = "linear"
 
     model, tokenizer = get_model(opt)
@@ -137,8 +115,8 @@ def main(args):
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
     # import pdb; pdb.set_trace()
-    respond = build_generator(model, tokenizer, temperature=args.temperature, top_p=args.top_p,
-                              max_gen_len=args.max_gen_len, use_cache=True)
+    respond = build_generator(model, tokenizer, temperature=opt.temperature, top_p=opt.top_p,
+                              max_new_tokens=opt.max_seq_len, use_cache=True)
 
     demo = gr.Interface(
         respond,
@@ -155,8 +133,10 @@ def main(args):
     )
 
     demo.queue()
-    demo.launch(server_name=args.host, server_port=args.port, show_error=True, share=True)
+    demo.launch(server_name=opt.host, server_port=opt.port, show_error=True, share=True)
 
 if __name__ == "__main__":
-    opt = parse_config()
+    opt = get_parser_args()
+    opt.model_path = 'out/fft_layer28_seqlen1024_dim1024_bs2_accum64_h16_hkv8/pretrain_epoch_1_ft_epoch_0.pth'
+    
     main(opt)

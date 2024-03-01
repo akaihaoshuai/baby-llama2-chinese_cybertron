@@ -50,16 +50,7 @@ def inference(opt):
 
 
 if __name__=="__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='best.pth', help="path to model")
-    parser.add_argument("--config_path", type=str, default='config.yaml', help="path to config")
-    parser.add_argument("--prompt", type=str, default='你好。', help="path to config")
-    parser.add_argument("--max_new_tokens", type=int, default=1024, help="path to config")
-    parser.add_argument("--temperature", type=float, default=1.0, help="path to config")
-    parser.add_argument("--top_k", type=float, default=5, help="path to config")
-    parser.add_argument("--device", type=str, default='cuda', help="path to config")
-    parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
-
-    opt = parser.parse_args()
-
+    opt = get_parser_args()
+    opt.model_path = 'out/fft_layer28_seqlen1024_dim1024_bs2_accum64_h16_hkv8/pretrain_epoch_1_ft_epoch_0.pth'
+    
     inference(opt)

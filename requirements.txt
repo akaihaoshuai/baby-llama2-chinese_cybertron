@@ -14,3 +14,4 @@ jsonlines
 fschat
 nltk
 mpi4py
+gradio

@@ -38,6 +38,7 @@ model_params:
   model_type: 'Model'
 
 train_params:
+  use_deepspeed: False
   max_epoch: 3
   eval_interval: 1
   log_interval: 200

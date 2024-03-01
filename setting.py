@@ -35,6 +35,7 @@ def get_parser_args():
     parser.add_argument('--model_type', type=str, default="Model", choices=['Model'])
     
     # train params
+    parser.add_argument("--use_deepspeed", type=bool, default=False)
     parser.add_argument("--max_epoch", type=int, default=2)
     parser.add_argument("--eval_interval", type=int, default=1)
     parser.add_argument("--log_interval", type=int, default=200)
@@ -123,6 +124,7 @@ def parser_other_config_except_model(opt):
     # train
     train_params_yaml = config.get('train_params')
     if None != train_params_yaml:
+        opt.use_deepspeed = train_params_yaml.get('use_deepspeed', opt.use_deepspeed)
         opt.max_epoch = train_params_yaml.get('max_epoch', opt.max_epoch)
         opt.eval_interval = train_params_yaml.get('eval_interval', opt.eval_interval)
         opt.log_interval = train_params_yaml.get('log_interval', opt.log_interval)
@@ -153,7 +155,6 @@ def parser_other_config_except_model(opt):
     #     opt.lora_attn_alpha = fine_tuning_params_yaml.get('lora_attn_alpha', opt.lora_attn_alpha)
     #     opt.lora_dropout = fine_tuning_params_yaml.get('lora_dropout', opt.lora_dropout)
     #     opt.lora_r_dropout = fine_tuning_params_yaml.get('lora_r_dropout', opt.lora_r_dropout)
-
 
     # eval
     eval_params_yaml = config.get('eval_params')

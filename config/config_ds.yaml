@@ -68,7 +68,10 @@ train_params:
   backend: 'nccl'
   device: 'cuda'
   compile: False
+  use_neftune: True
+  neftune_noise_alpha: 0.1
 
+  
 fine_tuning_params:
   ft_type: 'full_ft'  # full_ft/lora/qlora 
   lora_mudule: 'linear'  # linear/embedding/all

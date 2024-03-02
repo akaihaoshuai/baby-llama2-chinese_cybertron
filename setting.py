@@ -61,6 +61,8 @@ def get_parser_args():
     parser.add_argument("--decay_lr", type=bool, default=True)
     parser.add_argument("--warmup_iters", type=int, default=1000)
     parser.add_argument("--lr_decay_iters", type=int, default=80000)
+    parser.add_argument("--use_neftune", type=bool, default=True)
+    parser.add_argument("--neftune_noise_alpha", type=float, default=0.1)
 
     # fine_tuning params
     parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
@@ -168,6 +170,8 @@ def parser_other_config_except_model(opt):
         opt.decay_lr = train_params_yaml.get('decay_lr', opt.decay_lr)
         opt.warmup_iters = train_params_yaml.get('warmup_iters', opt.warmup_iters)
         opt.lr_decay_iters = train_params_yaml.get('lr_decay_iters', opt.lr_decay_iters)
+        opt.use_neftune = train_params_yaml.get('use_neftune', opt.use_neftune)
+        opt.neftune_noise_alpha = train_params_yaml.get('neftune_noise_alpha', opt.neftune_noise_alpha)
         opt.min_lr = train_params_yaml.get('min_lr', opt.min_lr)
         opt.backend = train_params_yaml.get('backend', opt.backend)
         opt.device = train_params_yaml.get('device', opt.device)

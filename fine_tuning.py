@@ -104,7 +104,7 @@ def ft_model(opt):
             print(ds_config)
 
     #init model
-    model=init_model(opt)
+    model=init_model(opt, train_flag=True)
     model_path, state_dict, lora_path, lora_state_dict = read_ckpt(opt.model_path)
     load_weight(model, state_dict)
     model.to(opt.device)

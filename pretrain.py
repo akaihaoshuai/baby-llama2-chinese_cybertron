@@ -93,7 +93,7 @@ def pretrain_model(opt):
             print(ds_config)
     
     #init model
-    model=init_model(opt)
+    model=init_model(opt, train_flag=True)
     if master_process:
         model.print_params()
    

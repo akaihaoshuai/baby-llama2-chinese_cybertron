@@ -30,15 +30,21 @@ class JerryTransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.ffn_norm = RMSNorm(params.dim, eps=params.norm_eps)
 
-    def forward(self, x, freq_cos, freq_sin, position_ids):
-        h = x + self.attention.forward(self.attention_norm(x), freq_cos, freq_sin, position_ids)
+    def forward(self, x, 
+                freq_cos, freq_sin, 
+                position_ids,
+                attention_mask: Optional[torch.Tensor] = None):
+        
+        h = x + self.attention.forward(self.attention_norm(x), 
+                                       freq_cos, freq_sin, 
+                                       position_ids,
+                                       attention_mask)
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
 
 class Jerry(nn.Module):
-    def __init__(self, params):
-        super().__init__()
+    def __init__(self, params, train_flag=False):
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
@@ -47,6 +53,10 @@ class Jerry(nn.Module):
         self.rope_scaling_factor = params.rope_scaling_factor
         self.rope_scaling_type = params.rope_scaling_type
         self.head_dim = params.dim // params.n_heads
+        self.train_flag = train_flag
+
+        self.use_neftune = params.use_neftune
+        self.neftune_noise_alpha = params.neftune_noise_alpha
 
         # vocab_size = self.vocab_size
         vocab_size = ((params.vocab_size + 63) // 64) * 64
@@ -109,9 +119,21 @@ class Jerry(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, tokens: torch.Tensor, targets: Optional[torch.Tensor] = None) -> torch.Tensor:
-        _bsz, seqlen = tokens.shape
+    def neftune_embedding(self, tokens):
         h = self.tok_embeddings(tokens)
+        dims = torch.tensor(h.size(1) * h.size(2))
+        mag_norm = self.neftune_noise_alpha/torch.sqrt(dims)
+        return h + torch.zeros_like(h).uniform_(-mag_norm, mag_norm)
+
+    def forward(self, tokens: torch.Tensor, 
+                targets: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        _bsz, seqlen = tokens.shape
+
+        if self.train_flag and self.use_neftune:
+            h = self.neftune_embedding(tokens)
+        else:
+            h = self.tok_embeddings(tokens)
 
         h = self.dropout(h)
         position_ids = torch.arange(seqlen, dtype=torch.long, device=tokens.device)

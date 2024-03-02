@@ -232,7 +232,6 @@ if __name__=="__main__":
     # if os.path.exists(log_dir):
     #     os.remove(log_dir) 
 
-
     logger = get_logger(log_dir)
     # various inits, derived attributes, I/O setup
     # various inits, derived attributes, I/O setup

@@ -172,6 +172,8 @@ def eval(model_path_name,opt,logger):
 if __name__=="__main__":
     # -----------------------------------------------------------------------------
     opt = get_parser_args()
+    opt, config = parser_all_config(opt)
+
     # start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
     #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
     #exec(open('configurator.py').read()) # overrides from command line or config file

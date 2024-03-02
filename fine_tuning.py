@@ -158,7 +158,13 @@ def ft_model(opt):
 
     print(f"====================prepear dataset====================")
 
-    train_ds = SFTDataset(opt.sft_data_path,tokenizer, max_length=opt.max_seq_len)
+    if opt.rope_scaling_factor > 1.0:
+        train_ds = SFTDataset(opt.sft_long_data_path_train, tokenizer, max_length=opt.max_seq_len)
+        val_ds = SFTDataset(opt.sft_long_data_path_val, tokenizer, max_length=opt.max_seq_len)
+    else:
+        train_ds = SFTDataset(opt.sft_data_path, tokenizer, max_length=opt.max_seq_len)
+        val_ds = PretrainDataset(opt.valid_data_path, max_length=opt.max_seq_len)
+
     if ddp:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
     else:
@@ -172,7 +178,6 @@ def ft_model(opt):
         num_workers=0,
         sampler=train_sampler
     )
-    val_ds = PretrainDataset(opt.valid_data_path, max_length=256)
     val_loader = torch.utils.data.DataLoader(
         val_ds,
         batch_size=opt.batch_size,
@@ -213,75 +218,68 @@ def ft_model(opt):
 # I/O
 if __name__=="__main__":
     opt = get_parser_args()
-    src_batch_size = 4 # opt.batch_size
+    if opt.use_deepspeed:
+        opt.config = 'config/config_ds.yaml'
+    else:
+        opt.config = 'config/config.yaml'
+    opt, config = parser_all_config(opt)
+    opt.ft_type = 'full_ft'
+    opt.model_path = ''  # 输入文件夹
+
+    # 遍历全部sft处理
+    if opt.use_deepspeed:
+        save_config_file_name = 'config_ds.yaml'
+        if opt.ft_type == 'lora':
+            save_dir = opt.model_path.replace('pretrain', 'ft_lora_ds')
+        else:
+            save_dir = opt.model_path.replace('pretrain', 'ft_full_ds')
+    else:
+        save_config_file_name = 'config.yaml'
+        if opt.ft_type == 'lora':
+            save_dir = opt.model_path.replace('pretrain', 'ft_lora')
+        else:
+            save_dir = opt.model_path.replace('pretrain', 'ft_full')
+
+    if os.path.exists(os.path.join(opt.model_path, 'config.yaml')):
+        opt.config = os.path.join(opt.model_path, 'config.yaml')
+    else:
+        opt.config = os.path.join(opt.model_path, 'config_ds.yaml')
+
+    opt, config = parser_model_config(opt)
+
+    if opt.use_deepspeed:
+        train_params = dict()
+        train_params['use_deepspeed'] = opt.use_deepspeed
+        config['train_params'] = train_params
     
-    # 遍历out目录下的所有pretrain文件夹,全部sft处理
-    pretrain_list = os.listdir(opt.out_dir)
-    for pretrain_model in pretrain_list:
-        model_path = os.path.join(opt.out_dir, pretrain_model)
-        if os.path.isdir(model_path) and 'pretrain' in model_path: 
+    set_fine_tuning_paras_to_config(opt, config)
 
-            if not opt.use_deepspeed and 'ds' in model_path:  # 没有使用deepspeed，不能微调使用deepspeed训练的模型，会OOM
-                continue
-            
-            if opt.use_deepspeed:
-                save_config_file_name = 'config_ds.yaml'
-                if opt.ft_type == 'lora':
-                    save_dir = model_path.replace('pretrain', 'ft_lora_ds')
-                else:
-                    save_dir = model_path.replace('pretrain', 'ft_full_ds')
-            else:
-                save_config_file_name = 'config.yaml'
-                if opt.ft_type == 'lora':
-                    save_dir = model_path.replace('pretrain', 'ft_lora')
-                else:
-                    save_dir = model_path.replace('pretrain', 'ft_full')
+    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    
+    # 保存一份参数
+    with open(os.path.join(save_dir, save_config_file_name), "w") as file:
+        import yaml
+        file.write(yaml.dump(config))
 
+    model_list = os.listdir(opt.model_path)
+    for model_ in model_list:
+        if model_.endswith('.pth'):
+            model_name = model_.split('.')[0]
 
-            if os.path.exists(os.path.join(model_path, 'config.yaml')):
-                opt.config = os.path.join(model_path, 'config.yaml')
-            else:
-                opt.config = os.path.join(model_path, 'config_ds.yaml')
+            log_dir = os.path.join(save_dir,f'{model_name}_log.log')
+            # if os.path.exists(log_dir):
+            #     os.remove(log_dir) 
+            logger = get_logger(log_dir)
 
-            opt, config = parser_model_config(opt)
-            if opt.use_deepspeed:
-                train_params = dict()
-                train_params['use_deepspeed'] = opt.use_deepspeed
-                config['train_params'] = train_params
-            
-            set_fine_tuning_paras_to_config(opt, config)
+            ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
 
-
-            save_dir =save_dir.replace(f'bs{opt.batch_size}', f'bs{src_batch_size}')
-            opt.batch_size = src_batch_size
-
-            if not os.path.exists(save_dir): os.makedirs(save_dir)
-            
-            # 保存一份参数
-            with open(os.path.join(save_dir, save_config_file_name), "w") as file:
-                import yaml
-                file.write(yaml.dump(config))
-
-            model_list = os.listdir(model_path)
-            for model_ in model_list:
-                if model_.endswith('.pth'):
-                    opt.model_path = os.path.join(model_path, model_)
-                    model_name = model_.split('.')[0]
-
-                    log_dir = os.path.join(save_dir,f'{model_name}_log.log')
-                    # if os.path.exists(log_dir):
-                    #     os.remove(log_dir) 
-                    logger = get_logger(log_dir)
-
-                    ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-
-                    # -----------------------------------------------------------------------------
-                    config_keys = [
-                        k
-                        for k, v in globals().items()
-                        if not k.startswith("_") and isinstance(v, (int, float, bool, str))
-                    ]
-                    # exec(open("configurator.py").read())  # overrides from command line or config file
-                    # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
-                    # -----------------------------------------------------------------------------
-                    ft_model(opt)
+            # -----------------------------------------------------------------------------
+            config_keys = [
+                k
+                for k, v in globals().items()
+                if not k.startswith("_") and isinstance(v, (int, float, bool, str))
+            ]
+            # exec(open("configurator.py").read())  # overrides from command line or config file
+            # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
+            # -----------------------------------------------------------------------------
+            ft_model(opt)

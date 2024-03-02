@@ -16,6 +16,9 @@ dataset_params:
         'data/test_zh_0.json',
         'data/test_en_1.json',
     ]
+  
+  sft_long_data_path_train: './data/sft_long_data_train.csv'
+  sft_long_data_path_val: './data/sft_long_data_val.csv'
 
 model_path: 'best.model'
 max_seq_len: 1024
@@ -39,6 +42,9 @@ model_params:
   vocab_size: 64793
   vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'
   model_type: 'Model'
+  use_shift_short_attn: False
+  group_size_ratio: 0.25
+  use_ssa_min_seq: 8192  # 2048*4
 
 train_params:
   use_deepspeed: False

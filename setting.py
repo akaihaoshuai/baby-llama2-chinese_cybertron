@@ -11,6 +11,8 @@ def get_parser_args():
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--test_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--sft_data_path", type=str, default='./data/sft_data.csv', help="path to config")
+    parser.add_argument("--sft_long_data_path_train", type=str, default='./data/sft_data.csv', help="path to config")
+    parser.add_argument("--sft_long_data_path_val", type=str, default='./data/sft_data.csv', help="path to config")
     parser.add_argument("--out_dir", type=str, default='out', help="path to config")
     parser.add_argument("--model_path", type=str, default='best.pth', help="path to config")
     parser.add_argument("--lora_path", type=str, default='', help="")
@@ -33,6 +35,9 @@ def get_parser_args():
     parser.add_argument("--vocab_size", type=int, default=64793)
     parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
     parser.add_argument('--model_type', type=str, default="Model", choices=['Model'])
+    parser.add_argument('--use_shift_short_attn', type=bool, default=False)
+    parser.add_argument('--group_size_ratio', type=float, default=0.25)
+    parser.add_argument('--use_ssa_min_seq', type=int, default=8192)
     
     parser.add_argument('--merge_lora_to_save', type=bool, default=False, help="merge_lora_to_save")
     parser.add_argument('--merge_lora_on_load', type=bool, default=False, help="merge_lora_on_load")
@@ -118,6 +123,9 @@ def parser_model_config(opt):
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)
         opt.model_type = model_params_yaml.get('model_type', opt.model_type)
+        opt.use_shift_short_attn = model_params_yaml.get('use_shift_short_attn', opt.use_shift_short_attn)
+        opt.group_size_ratio = model_params_yaml.get('group_size_ratio', opt.group_size_ratio)
+        opt.use_ssa_min_seq = model_params_yaml.get('use_ssa_min_seq', opt.use_ssa_min_seq)
 
     return opt,config
 
@@ -130,6 +138,8 @@ def parser_other_config_except_model(opt):
         opt.train_data_path = dataset_params_yaml.get('train_data_path', opt.train_data_path)
         opt.valid_data_path = dataset_params_yaml.get('valid_data_path', opt.valid_data_path)
         opt.sft_data_path = dataset_params_yaml.get('sft_data_path', opt.sft_data_path)
+        opt.sft_long_data_path_train = dataset_params_yaml.get('sft_long_data_path_train', opt.sft_long_data_path_train)
+        opt.sft_long_data_path_val = dataset_params_yaml.get('sft_long_data_path_val', opt.sft_long_data_path_val)
         opt.test_data_path = dataset_params_yaml.get('test_data_path', opt.test_data_path)
     
     opt.model_path = config.get('model_path',opt.model_path)
@@ -204,8 +214,7 @@ def set_fine_tuning_paras_to_config(opt, config):
     if ori_max_seq_len:
         ori_max_seq_len *= orig_rope_scaling_factor
         if opt.max_seq_len > ori_max_seq_len:
-            scaling_factor = float(math.ceil(opt.max_seq_len / ori_max_seq_len))
-            opt.rope_scaling_factor = scaling_factor
+            opt.rope_scaling_factor = float(math.ceil(opt.max_seq_len / ori_max_seq_len))
 
 
 def read_deepspeed_config(opt):
@@ -222,7 +231,6 @@ def read_deepspeed_config(opt):
     ds_config['grad_accum_steps']=opt.grad_accum_steps  # 梯度累积
 
     ds_config['scheduler']['params']['warmup_num_steps']=opt.warmup_iters  # 
-
 
     ds_config['steps_per_print']=opt.log_interval  # 
     ds_config['gradient_clipping']=opt.grad_clip  # 

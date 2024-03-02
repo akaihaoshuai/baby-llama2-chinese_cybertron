@@ -69,7 +69,7 @@ def process_data_v1():
     process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text)
 
     print('process_wiki_zh_clean.')
-    process_wiki_zh_clean(tokenizer, BATCH_SIZE, save_all_text)
+    process_wiki_zh_clean(tokenizer, save_all_text)
     
     print('process_baidu.')
     process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
@@ -115,6 +115,7 @@ def process_data_v1():
     
     print('sft_process.')
     sft_process(save_all_text)
+    sft_long_process(save_all_text)
 
 
 if __name__=="__main__":

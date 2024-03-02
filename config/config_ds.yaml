@@ -16,6 +16,9 @@ dataset_params:
         'data/test_zh_0.json',
         'data/test_en_1.json',
     ]
+  
+  sft_long_data_path_train: './data/sft_long_data_train.csv'
+  sft_long_data_path_val: './data/sft_long_data_val.csv'
 
 model_path: 'best.model'
 max_seq_len: 1024
@@ -26,7 +29,7 @@ model_params:
   dim: 1536
   n_layers: 22
   n_heads: 12        # 要能被dim整除
-  n_kv_heads: 4      # 0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA
+  n_kv_heads: 2      # 0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA
   multiple_of: 32
   rope_scaling_factor: 1.0
   rope_scaling_type: 'linear'  # linear/dynamic
@@ -38,6 +41,9 @@ model_params:
   vocab_size: 64793
   vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'
   model_type: 'Model'
+  use_shift_short_attn: False
+  group_size_ratio: 0.25
+  use_ssa_min_seq: 8192  # 2048*4
 
 train_params:
   use_deepspeed: True
@@ -49,7 +55,7 @@ train_params:
   always_save_ckpt: True
   init_from: 'scratch'
   grad_accum_steps: 64
-  batch_size: 4
+  batch_size: 6
   learning_rate: 0.0003
   weight_decay: 0.1
   beta1: 0.9

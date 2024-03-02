@@ -1,7 +1,27 @@
 ## baby-llama2-chinese-fix
-参考https://github.com/DLLXW/baby-llama2-chinese , 用于从头预训练+SFT一个小参数量的中文LLaMa2的仓库；24G单卡即可运行得到一个流畅中文问答的chat-llama2.
+参考https://github.com/DLLXW/baby-llama2-chinese：用于从头预训练+SFT一个小参数量的中文LLaMa2的仓库；24G单卡即可运行得到一个流畅中文问答的chat-llama2.
 
->20231013更新，fork代码
+本项目是便于自己学习LLM相关知识所建，实现了一些功能，但没有详细的测试，代码中难免存在一些bug。
+
+
+## 更新记录
+>2024.03.02：支持LoRA训练，根据LongLoRA优化代码，支持SS-Attn
+
+>2024.02.29：支持长度外推，from LLaMA。 https://zhuanlan.zhihu.com/p/683731440
+
+>2024.02.24：支持deepspeed训练。https://zhuanlan.zhihu.com/p/683768690
+
+>2023.11.02：增加训练tokenizer代码，扩展数据。
+
+>2023.10.21：测试falsh attention
+
+>2023.10.13：fork代码。https://zhuanlan.zhihu.com/p/660759033
+
+
+
+具体内容可以参考知乎系列文章：https://zhuanlan.zhihu.com/p/660759033
+
+
 
 ## 训练数据
 - Wiki中文百科（25w词条）[wikipedia-cn-20230720-filtered](https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered)
@@ -11,6 +31,8 @@
 - [Medical Dataset](https://huggingface.co/datasets/shibing624/medical/tree/main)
 
 除此之外，为了让模型具备在某一个专有领域的能力，这里选用了“医疗问答”作为切入点，尝试收集了很多的医疗数据和上面的通用语料一起喂给模型。
+
+tips：训练数据在训练的过程中有所扩展，详情可参考知乎文章。
 
 
 ## 中文分词器
@@ -44,19 +66,44 @@ python train_tokenizer.py
 - 计算loss的时候，对prompt部分的loss进行mask，只计算answer部分的loss即可。
 
 ## 预训练+SFT
-因为用到了torch的分布式训练，我们需要在运行的时候设置环境变量。使用python -m torch.distributed.launch --use_env pretrain.py，或直接使用torchrun替代python命令。
+参考run.sh
 
 ```python
-# 预训练——多卡
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env pretrain.py
-# 单卡
-CUDA_VISIBLE_DEVICES=0 python pretrain.py
+# python data_prepare.py
+# CUDA_VISIBLE_DEVICES=1 python data_prepare.py
 
-# SFT
-CUDA_VISIBLE_DEVICES=3 python sft.py
+# 重新训练tokenizer
+# CUDA_VISIBLE_DEVICES=1 python train_tokenizer.py
 
-# eval
-CUDA_VISIBLE_DEVICES=3 python eval.py
+use_accelerate=false
+use_nohup=false
+
+if [ use_accelerate == true ] ; then
+    echo "[LLM] use accelerate"
+    if [ use_nohup == true ] ; then
+        echo "[LLM] use nohup"
+        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env pretrain.py >out/pretrain_1_log
+        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env fine_tuning.py >out/fine_tuning_log
+        CUDA_VISIBLE_DEVICES=0 nohup python eval.py >out/eval_log
+    else
+        CUDA_VISIBLE_DEVICES=0,1,5,6 python -m torch.distributed.launch --nproc_per_node=4 --use_env pretrain.py
+        CUDA_VISIBLE_DEVICES=0,1,5,6 python -m torch.distributed.launch --nproc_per_node=4 --use_env fine_tuning.py
+        CUDA_VISIBLE_DEVICES=1 python eval.py
+    fi
+else  # deepspeed
+    echo "[LLM] use deepspeed"
+    if [ use_nohup == true ] ; then
+        echo "[LLM] use nohup"
+        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup deepspeed --num_gpus=4 pretrain.py  --use_deepspeed True >out/pretrain_ds_log
+        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup deepspeed --num_gpus=4 fine_tuning.py  --use_deepspeed True >out/fine_tuning_ds_log
+        CUDA_VISIBLE_DEVICES=10 nohup python eval.py >out/eval_ds_log
+    else
+        CUDA_VISIBLE_DEVICES=0,1,5,6 deepspeed --num_gpus=4 pretrain.py --use_deepspeed True
+        CUDA_VISIBLE_DEVICES=0,1,5,6 deepspeed --num_gpus=4 fine_tuning.py --use_deepspeed True
+        CUDA_VISIBLE_DEVICES=1 python eval.py
+    fi
+fi
+
 ```
 
 
@@ -67,5 +114,3 @@ CUDA_VISIBLE_DEVICES=3 python eval.py
 - n_heads = 8
 
 推理脚本可以参考eval.py。
-
-

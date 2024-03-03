@@ -176,9 +176,9 @@ class Perplexity(evaluate.Metric):
             labels = encoded_batch
 
             with torch.no_grad():
-                out_logits = model(encoded_batch, attention_mask=attn_mask).logits
+                logits = model(encoded_batch, attention_mask=attn_mask).logits
 
-            shift_logits = out_logits[..., :-1, :].contiguous()
+            shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             shift_attention_mask_batch = attn_mask[..., 1:].contiguous()
 

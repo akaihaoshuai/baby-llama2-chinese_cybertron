@@ -9,7 +9,7 @@ from typing import Dict
 
 from src.loralib.layers import *
 
-
+# from https://github.com/microsoft/LoRA/tree/main/loralib
 def mark_only_lora_as_trainable(model: nn.Module, bias: str = 'none') -> None:
     for name, para in model.named_parameters():
         if 'lora' not in name:

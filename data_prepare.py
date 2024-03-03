@@ -102,7 +102,6 @@ def process_data_v1():
     print('process_medical_qa.')
     process_medical_qa(tokenizer, save_all_text)
 
-
     collect_pretrain_data(GLOBAL_DATA_PATH)
 
     print('valid_medical.')
@@ -121,5 +120,4 @@ def process_data_v1():
 if __name__=="__main__":
 
     # process_data_v0()
-
     process_data_v1()

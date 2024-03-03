@@ -4,11 +4,12 @@ from src.utils import *
 from setting import *
 from src.models.Jerry import Jerry
 from tokenizer_model import ChatGLMTokenizer
+from src.share import *
 
 
 def get_model(opt):
     model_path, state_dict, lora_path, lora_state_dict = read_ckpt(opt.model_path)
-    model = Jerry(opt)
+    model = init_model(opt)
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -38,13 +39,13 @@ def inference(opt):
 
     model, tokenizer = get_model(opt)
     
-    x=tokenizer.encode(opt.prompt,add_special_tokens=False)
+    x=tokenizer.encode(opt.prompt, add_special_tokens=False)
     x = (torch.tensor(x, dtype=torch.long, device=opt.device)[None, ...])
     y = model.generate(x, 
                        max_new_tokens=opt.max_new_tokens, 
                        temperature=opt.temperature, 
                        top_k=opt.top_k)
-    predict=tokenizer.decode(y[0].tolist())
+    predict=tokenizer.decode(y)
 
     print(f'prompt: {opt.prompt}. /n response: {predict}')
 

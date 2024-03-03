@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from src.models.layers.position_code import *
-from typing import Optional
+from typing import Optional, List
 from einops import rearrange
 
 
@@ -21,8 +21,9 @@ def repeat_kv(hidden_states: torch.Tensor, num_kv_rep_groups: int) -> torch.Tens
 
 
 class Attention(nn.Module):
-    def __init__(self, params):
+    def __init__(self, params, layer_idx):
         super().__init__()
+        self.layer_idx = layer_idx
         self.n_kv_heads = params.n_heads if params.n_kv_heads is None else params.n_kv_heads
         model_parallel_size = 1
         self.num_heads = params.n_heads // model_parallel_size
@@ -76,11 +77,6 @@ class Attention(nn.Module):
         if not self.flash_attention:
             # use flash attention or a manual implementation?
             self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-            if not self.flash:
-                print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-                mask = torch.full((1, 1, params.max_seq_len, params.max_seq_len), float("-inf"))
-                mask = torch.triu(mask, diagonal=1)
-                self.register_buffer("mask", mask)
 
 
     def _forward(
@@ -88,8 +84,8 @@ class Attention(nn.Module):
         x: torch.Tensor,
         freq_cos, freq_sin,
         position_ids: torch.Tensor,
-        use_cache: bool = False,
-        past_key_value: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]]=None,
     ):
         bsz, seqlen, _ = x.shape
         
@@ -100,12 +96,23 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
         xv = xv.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
+        kv_seq_len = xk.shape[-2]
+        if past_key_values is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_values.get_usable_length(kv_seq_len, self.layer_idx)
+
         # RoPE relative positional embeddings
+        # cos, sin = self.rotary_emb(xv, seq_len=kv_seq_len)
         xq, xk = apply_rotary_pos_emb(xq, xk, freq_cos, freq_sin, position_ids)
 
-        if past_key_value is not None:
+        if past_key_values is not None:
             cache_kwargs = {"sin": freq_cos, "cos": freq_sin}  # Specific to RoPE models
-            xk, xv = past_key_value.update(xk, xv, self.layer_idx, cache_kwargs)
+            xk, xv = past_key_values.update(xk, xv, self.layer_idx, cache_kwargs)
 
         # grouped multiquery attention: expand out keys and values
         # 有没有这里都没有任何区别
@@ -115,12 +122,19 @@ class Attention(nn.Module):
         # flash implementation
         if self.flash:
             output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None, 
-                                                                        dropout_p=self.dropout if self.training else 0.0, is_causal=True)
+                                                                      dropout_p=self.dropout if self.training else 0.0, is_causal=True)
         else:
             # manual implementation
             attn_weights = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
-            assert hasattr(self, 'mask')
-            attn_weights = attn_weights + self.mask[:, :, :seqlen, :seqlen]   # (bs, num_heads, seqlen, cache_len + seqlen)
+
+            if attention_mask is not None:
+                if attention_mask[:, :, :seqlen, :seqlen].size() != attn_weights.size():
+                    raise ValueError(
+                        f"Attention mask should be of size {attn_weights.size()}, but is {attention_mask.size()}"
+                    )
+                
+                attn_weights = attn_weights + attention_mask[:, :, :seqlen, :seqlen]
+
             attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(xq)
             attn_weights = self.attn_dropout(attn_weights)
             output = torch.matmul(attn_weights, xv)  # (bs, num_heads, seqlen, head_dim)
@@ -130,15 +144,15 @@ class Attention(nn.Module):
 
         # final projection into the residual stream
         output = self.wo(output)
-        return self.resid_dropout(output)
+        return self.resid_dropout(output), past_key_values
 
     def forward_flashattn(
         self,
         x: torch.Tensor,
         freq_cos, freq_sin,
         position_ids: torch.Tensor,
-        use_cache: bool = False,
-        past_key_value: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]]=None,
     ):
         bsz, seqlen, _ = x.shape
         
@@ -149,12 +163,22 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
         xv = xv.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
+        kv_seq_len = xk.shape[-2]
+        if past_key_values is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_values.get_usable_length(kv_seq_len, self.layer_idx)
+
         # RoPE relative positional embeddings
         xq, xk = apply_rotary_pos_emb(xq, xk, freq_cos, freq_sin, position_ids)
 
-        if past_key_value is not None:
+        if past_key_values is not None:
             cache_kwargs = {"sin": freq_cos, "cos": freq_sin}  # Specific to RoPE models
-            xk, xv = past_key_value.update(xk, xv, self.layer_idx, cache_kwargs)
+            xk, xv = past_key_values.update(xk, xv, self.layer_idx, cache_kwargs)
 
         # grouped multiquery attention: expand out keys and values
         # 有没有这里都没有任何区别
@@ -176,9 +200,9 @@ class Attention(nn.Module):
         
         # final projection into the residual stream
         output = self.wo(output)
-        return self.resid_dropout(output)
+        return self.resid_dropout(output), past_key_values
 
-
+    # from https://github.com/dvlab-research/LongLoRA
     def shift_short_attn_forward_flashattn(
         self,
         x: torch.Tensor,
@@ -186,7 +210,7 @@ class Attention(nn.Module):
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         use_cache: bool = False,
-        past_key_value: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]]=None,
     ):
         from flash_attn.bert_padding import pad_input, unpad_input
         from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
@@ -204,20 +228,20 @@ class Attention(nn.Module):
         value_states = value_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
+        if past_key_values is not None:
+            kv_seq_len += past_key_values[0].shape[-2]
 
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, freq_cos, freq_sin, position_ids
         )
 
         # Past Key value support
-        if past_key_value is not None:
+        if past_key_values is not None:
             # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            key_states = torch.cat([past_key_values[0], key_states], dim=2)
+            value_states = torch.cat([past_key_values[1], value_states], dim=2)
 
-        past_key_value = (key_states, value_states) if use_cache else None
+        past_key_values = (key_states, value_states) if use_cache else None
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_kv_rep_groups)
@@ -254,8 +278,9 @@ class Attention(nn.Module):
         )
         output = output.reshape(bsz, q_len, self.num_heads, self.head_dim)
 
-        return self.wo(rearrange(output, "b s h d -> b s (h d)"))
-
+        return self.wo(rearrange(output, "b s h d -> b s (h d)")), past_key_values
+    
+    # from https://github.com/dvlab-research/LongLoRA
     def shift_short_attn_forward_noflashattn(
         self,
         x: torch.Tensor,
@@ -263,7 +288,7 @@ class Attention(nn.Module):
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         use_cache: bool = False,
-        past_key_value: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]]=None,
     ):
         bsz, q_len, _ = x.size()
        
@@ -274,19 +299,19 @@ class Attention(nn.Module):
         value_states = value_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
         kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
+        if past_key_values is not None:
+            kv_seq_len += past_key_values[0].shape[-2]
 
         query_states, key_states = apply_rotary_pos_emb(
             query_states, key_states, freq_cos, freq_sin, position_ids
         )
         
-        if past_key_value is not None:
+        if past_key_values is not None:
             # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            key_states = torch.cat([past_key_values[0], key_states], dim=2)
+            value_states = torch.cat([past_key_values[1], value_states], dim=2)
 
-        past_key_value = (key_states, value_states) if use_cache else None
+        past_key_values = (key_states, value_states) if use_cache else None
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_kv_rep_groups)
@@ -342,7 +367,7 @@ class Attention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, -1)
 
         attn_output = self.wo(attn_output)
-        return self.resid_dropout(attn_output)
+        return self.resid_dropout(attn_output), past_key_values
     
     def forward(
         self,
@@ -350,20 +375,28 @@ class Attention(nn.Module):
         freq_cos, freq_sin,
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        past_key_value: Optional[torch.Tensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]]=None,
     ):
         _, seqlen, _ = x.shape
         group_size = int(seqlen * self.group_size_ratio)
         if self.use_shift_short_attn and seqlen >= self.use_ssa_min_seq and seqlen % group_size == 0:
             if self.flash_attention:
-                output = self.shift_short_attn_forward_flashattn(x, freq_cos, freq_sin, position_ids, past_key_value)
+                output, past_key_values = self.shift_short_attn_forward_flashattn(x, freq_cos, freq_sin, 
+                                                                 position_ids, attention_mask, 
+                                                                 past_key_values)
             else:
-                output = self.shift_short_attn_forward_noflashattn(x, freq_cos, freq_sin, position_ids, past_key_value)
+                output, past_key_values = self.shift_short_attn_forward_noflashattn(x, freq_cos, freq_sin, 
+                                                                   position_ids, attention_mask, 
+                                                                   past_key_values)
         else:
             if self.flash_attention:
-                output = self.forward_flashattn(x, freq_cos, freq_sin, position_ids, past_key_value)
+                output, past_key_values = self.forward_flashattn(x, freq_cos, freq_sin, 
+                                                position_ids, 
+                                                attention_mask, 
+                                                past_key_values)
             else:
-                output = self._forward(x, freq_cos, freq_sin, position_ids, past_key_value)
+                output, past_key_values = self._forward(x, freq_cos, freq_sin, 
+                                       position_ids, attention_mask, 
+                                       past_key_values)
         
-        return output
+        return output, past_key_values

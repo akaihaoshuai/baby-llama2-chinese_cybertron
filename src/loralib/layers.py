@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import math
 from typing import Optional, List
 
+# from https://github.com/microsoft/LoRA/tree/main/loralib
 class LoRALayer():
     def __init__(
         self, 

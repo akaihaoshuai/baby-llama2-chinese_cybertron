@@ -128,8 +128,7 @@ def test_lines_one_sample(model, tokenizer, test_case, output_file, idx, opt):
     x = (torch.tensor(x, dtype=torch.long, device=opt.device)[None, ...])
 
     y = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)
-    predict=tokenizer.decode(y[0].tolist())
-    predict=predict.replace(prompt,'')
+    predict=tokenizer.decode(y)
 
     # Matching the last digit of the model output
     response_number = re.findall("\d+", predict)

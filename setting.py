@@ -5,6 +5,7 @@ import math
 
 def get_parser_args():
     parser = ArgumentParser()
+    parser.add_argument("--prompt", type=str, default='你好', help="path to config")
     parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
     parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
     parser.add_argument("--train_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")

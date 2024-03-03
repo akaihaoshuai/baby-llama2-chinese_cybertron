@@ -101,7 +101,7 @@ class GSM8K:
 
             x=self.tokenizer.encode(prompt,add_special_tokens=False)+[self.tokenizer.special_tokens['<eos>']]
             x = (torch.tensor(x, dtype=torch.long, device=self.opt.device)[None, ...])
-            logits = self.model(x)[0][0]
+            logits = self.model(x).logits[0][0]
 
             candidate_logits = [logits[self.tokenizer(label,add_special_tokens=False).input_ids[-1]] for label in ["A", "B", "C", "D"]]
             candidate_logits = torch.tensor(candidate_logits).to(torch.float32)

@@ -125,28 +125,9 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
 
         context_length = x.shape[-1]
         # print(f'=========length: {context_length}. =========')
-        if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
-            # output = model.generate(
-            #     **input,
-            #     max_new_tokens=max_gen,
-            #     num_beams=1,
-            #     do_sample=False,
-            #     temperature=1.0,
-            #     min_length=context_length+1,
-            #     eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
-            # )[0]
-            y = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)[0]
-        else:
-            # output = model.generate(
-            #     **input,
-            #     max_new_tokens=max_gen,
-            #     num_beams=1,
-            #     do_sample=False,
-            #     temperature=1.0,
-            # )[0]
-            y = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)[0]
+        y = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)[0]
 
-        pred = tokenizer.decode(y[context_length:], skip_special_tokens=True)
+        pred = tokenizer.decode(y, skip_special_tokens=True)
         pred = post_process(pred, model_name)
         preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
     

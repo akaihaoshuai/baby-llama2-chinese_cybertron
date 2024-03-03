@@ -67,7 +67,7 @@ def eval(opt, subject, model, tokenizer, dev_df, test_df, choices):
         # logits = model(
         #     input_ids=input_ids,
         # ).logits[:,-1].flatten()
-        logits = model(x)[0][0]
+        logits = model(x).logits[0][0]
 
         probs = (
             torch.nn.functional.softmax(

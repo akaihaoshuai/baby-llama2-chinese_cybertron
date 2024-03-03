@@ -30,9 +30,9 @@ def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger):
         lr = get_lr(epoch*iter_per_epoch+step, opt) if opt.decay_lr else opt.learning_rate
 
         if opt.use_deepspeed:
-            _, loss, _ = model_opt(X, Y)
+            output = model_opt(X, Y)
             loss_mask = loss_mask.view(-1)
-            loss = torch.sum(loss*loss_mask)/loss_mask.sum()
+            loss = torch.sum(output.loss*loss_mask)/loss_mask.sum()
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             # backward pass, with gradient scaling if training in fp16
             model_opt.backward(loss)
@@ -50,8 +50,10 @@ def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger):
                 model_opt.require_backward_grad_sync = 0 == opt.grad_accum_steps - 1
             
             with ctx:
-                logits,loss, _ = model_opt(X, Y)
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
+                output = model_opt(X, Y)
+                loss = F.cross_entropy(output.logits.view(-1, output.logits.size(-1)), 
+                                       Y.view(-1), 
+                                       ignore_index=0,reduce=False)
                 loss_mask = loss_mask.view(-1)
                 loss = torch.sum(loss*loss_mask)/loss_mask.sum()
                 # loss = raw_model.last_loss
@@ -91,7 +93,7 @@ def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger):
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
 
 
-def ft_model(opt):
+def ft_model(opt, model_name_path):
     master_process, ddp_local_rank,ctx= init_ddp(ddp, opt)
     
     print(f'**************model_path: {opt.model_path}**************')
@@ -105,7 +107,7 @@ def ft_model(opt):
 
     #init model
     model=init_model(opt, train_flag=True)
-    model_path, state_dict, lora_path, lora_state_dict = read_ckpt(opt.model_path)
+    model_path, state_dict, lora_path, lora_state_dict = read_ckpt(model_name_path)
     load_weight(model, state_dict)
     model.to(opt.device)
     if opt.ft_type == 'lora':
@@ -149,10 +151,10 @@ def ft_model(opt):
             prefix = "_orig_mod." if opt.compile else ""
             model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
             model_opt = DDP(model, device_ids=[ddp_local_rank])
-            #
-        model = model_opt.module if ddp else model # unwrap DDP container if needed
-    
-
+            model = model_opt.module
+        else:
+            model_opt=model
+            
     #-----init dataloader------
     tokenizer = ChatGLMTokenizer(vocab_file=opt.vocab_file)
 
@@ -224,7 +226,7 @@ if __name__=="__main__":
         opt.config = 'config/config.yaml'
     opt, config = parser_all_config(opt)
     opt.ft_type = 'full_ft'
-    opt.model_path = ''  # 输入文件夹
+    opt.model_path = './out/pretrain_layer28_seqlen1024_dim1024_accum64_h16_hkv8'  # 输入文件夹
 
     # 遍历全部sft处理
     if opt.use_deepspeed:
@@ -264,7 +266,9 @@ if __name__=="__main__":
     model_list = os.listdir(opt.model_path)
     for model_ in model_list:
         if model_.endswith('.pth'):
+
             model_name = model_.split('.')[0]
+            model_name_path = os.path.join(opt.model_path, model_)
 
             log_dir = os.path.join(save_dir,f'{model_name}_log.log')
             # if os.path.exists(log_dir):
@@ -282,4 +286,4 @@ if __name__=="__main__":
             # exec(open("configurator.py").read())  # overrides from command line or config file
             # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
             # -----------------------------------------------------------------------------
-            ft_model(opt)
+            ft_model(opt, model_name_path)

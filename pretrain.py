@@ -28,8 +28,8 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
         lr = lr*(1.0 + (opt.grad_accum_steps-1)*0.1)
                 
         if opt.use_deepspeed:
-            _, loss, _ = model_opt(X, Y)
-            model_opt.backward(loss)
+            output = model_opt(X, Y)
+            model_opt.backward(output.loss)
             model_opt.step()
         else:
             for param_group in optimizer.param_groups:
@@ -43,9 +43,9 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
                 model_opt.require_backward_grad_sync = 0 == opt.grad_accum_steps - 1
             
             with ctx:
-                _, loss, _ = model_opt(X, Y)
+                output = model_opt(X, Y)
                 # loss.reduction ='mean':
-                loss = loss / opt.grad_accum_steps
+                loss = output.loss / opt.grad_accum_steps
             
             # immediately async prefetch next batch while model is doing the forward pass on the GPU
             # backward pass, with gradient scaling if training in fp16
@@ -134,9 +134,10 @@ def pretrain_model(opt):
             prefix = "_orig_mod." if opt.compile else ""
             model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
             model_opt = DDP(model, device_ids=[ddp_local_rank])
+            model = model_opt.module
+        else:
+            model_opt= model              
             
-        model = model_opt.module if ddp else model # unwrap DDP container if needed
-
     print(f"====================prepear dataset====================")
 
     #-----init dataloader------

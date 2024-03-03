@@ -11,6 +11,7 @@ from tokenizer_model import ChatGLMTokenizer
 import numpy as np
 from setting import *
 from src.utils import *
+from src.share import *
 from tqdm import tqdm
 
 def compute_bleu(labels, preds, weights=None):
@@ -46,9 +47,8 @@ def eval_medical(model,model_path_name,tokenizer,opt,ctx,logger):
                 answer_list.append(answer)
                 with torch.no_grad():
                     with ctx:
-                        y = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)
-                        predict=tokenizer.decode(y[0].tolist())
-                        predict=predict.replace(prompt,'')
+                        outputs = model.generate(x, 2, opt.max_new_tokens, temperature=opt.temperature, top_k=opt.top_k)
+                        predict=tokenizer.decode(outputs)
                         predict_lst.append(predict)
                         # print('\n---------------')
                         # print('[prompt]:',prompt)
@@ -141,7 +141,7 @@ def eval(model_path_name,opt,logger):
         return
     
     opt.lora_path = lora_path
-    model = Jerry(opt)
+    model=init_model(opt)
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):

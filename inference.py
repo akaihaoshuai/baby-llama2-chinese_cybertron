@@ -52,6 +52,6 @@ def inference(opt):
 
 if __name__=="__main__":
     opt = get_parser_args()
-    opt.model_path = 'out/fft_layer28_seqlen1024_dim1024_bs2_accum64_h16_hkv8/pretrain_epoch_1_ft_epoch_0.pth'
+    opt.model_path = 'out/pretrain_layer18_seqlen1024_dim1536_accum64_h12_hkv2/epoch_0_step200.pth'
     
     inference(opt)

@@ -25,9 +25,9 @@ def get_parser_args():
     parser.add_argument("--n_heads", type=int, default=8)
     parser.add_argument("--n_kv_heads", type=int, default=0, help="0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA")
     parser.add_argument("--multiple_of", type=int, default=32)
-    parser.add_argument("--rope_beta", type=float, default=1.0)
+    parser.add_argument("--rope_beta", type=float, default=10000.0)
     parser.add_argument("--rope_scaling_factor", type=float, default=1.0)
-    parser.add_argument("--rope_scaling_type", default="linear", choices=['linear', 'dynamic'])
+    parser.add_argument("--rope_scaling_type", default="linear", choices=['linear', 'dynamic', 'clex'])
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--use_bias", type=bool, default=False)
     parser.add_argument("--norm_eps", type=float, default=0.00001)
@@ -46,8 +46,8 @@ def get_parser_args():
     # train params
     parser.add_argument("--use_deepspeed", type=bool, default=False)
     parser.add_argument("--max_epoch", type=int, default=2)
-    parser.add_argument("--eval_interval", type=int, default=1)
-    parser.add_argument("--log_interval", type=int, default=200)
+    parser.add_argument("--log_iters", type=int, default=200)
+    parser.add_argument("--save_iters", type=int, default=1000)
     parser.add_argument("--eval_iters", type=int, default=200)
     parser.add_argument("--eval_only", type=bool, default=False)
     parser.add_argument("--always_save_ckpt", type=bool, default=True)
@@ -155,8 +155,8 @@ def parser_other_config_except_model(opt):
     if None != train_params_yaml:
         opt.use_deepspeed = train_params_yaml.get('use_deepspeed', opt.use_deepspeed)
         opt.max_epoch = train_params_yaml.get('max_epoch', opt.max_epoch)
-        opt.eval_interval = train_params_yaml.get('eval_interval', opt.eval_interval)
-        opt.log_interval = train_params_yaml.get('log_interval', opt.log_interval)
+        opt.log_iters = train_params_yaml.get('log_iters', opt.log_iters)
+        opt.save_iters = train_params_yaml.get('save_iters', opt.save_iters)
         opt.eval_iters = train_params_yaml.get('eval_iters', opt.eval_iters)
         opt.eval_only = train_params_yaml.get('eval_only', opt.eval_only)
         opt.always_save_ckpt = train_params_yaml.get('always_save_ckpt', opt.always_save_ckpt)
@@ -237,7 +237,7 @@ def read_deepspeed_config(opt):
 
     ds_config['scheduler']['params']['warmup_num_steps']=opt.warmup_iters  # 
 
-    ds_config['steps_per_print']=opt.log_interval  # 
+    ds_config['steps_per_print']=opt.log_iters  # 
     ds_config['gradient_clipping']=opt.grad_clip  # 
 
     return ds_config

@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from src.models.layers.position_code import *
-from typing import Optional, List
+from typing import Optional, Tuple
 from einops import rearrange
 
 
@@ -36,13 +36,18 @@ class Attention(nn.Module):
         self.dropout = params.dropout
         self.flash_attention = params.flash_attention
 
+        self.rope_beta = params.rope_beta
+        self.rope_scaling_factor = params.rope_scaling_factor
+        self.rope_scaling_type = params.rope_scaling_type
+        self.max_position_embeddings = params.max_seq_len
+        
         self.use_shift_short_attn = params.use_shift_short_attn
         self.group_size_ratio = params.group_size_ratio
         self.use_ssa_min_seq = params.use_ssa_min_seq
 
         if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRALinear
-            self.wq = LoRALinear(
+            self.q_proj = LoRALinear(
                 params.dim, params.n_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
@@ -51,7 +56,7 @@ class Attention(nn.Module):
                 fan_in_fan_out=True,
                 merge_weights=False
             )
-            self.wk = LoRALinear(
+            self.k_proj = LoRALinear(
                 params.dim, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
@@ -60,7 +65,7 @@ class Attention(nn.Module):
                 fan_in_fan_out=True,
                 merge_weights=False
             )
-            self.wv = LoRALinear(
+            self.v_proj = LoRALinear(
                 params.dim, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
@@ -70,62 +75,108 @@ class Attention(nn.Module):
                 merge_weights=False
             )
         else:
-            self.wq = nn.Linear(params.dim, params.n_heads * self.head_dim, bias=params.use_bias)
-            self.wk = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
-            self.wv = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+            self.q_proj = nn.Linear(params.dim, params.n_heads * self.head_dim, bias=params.use_bias)
+            self.k_proj = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+            self.v_proj = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
                 
         if not self.flash_attention:
             # use flash attention or a manual implementation?
             self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
 
+        self._init_rope(params)
 
-    def _forward(
-        self,
-        x: torch.Tensor,
-        freq_cos, freq_sin,
-        position_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]]=None,
-    ):
+    # from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
+    def _init_rope(self, params):
+        if self.rope_scaling_factor <= 1.0:
+            self.rotary_emb = RotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_beta,
+            )
+        else:
+            if self.rope_scaling_type == "linear":
+                self.rotary_emb = LinearScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            elif self.rope_scaling_type == "dynamic":
+                self.rotary_emb = DynamicNTKScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            elif self.rope_scaling_type == "clex":
+                from src.models.layers.clex_position_code import CLEXScalingRotaryEmbedding
+                self.rotary_emb = CLEXScalingRotaryEmbedding(
+                    dim=self.head_dim, 
+                    max_position_embeddings=self.max_position_embeddings, 
+                    rope_scaling_max_factor=self.rope_scaling_factor)
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {self.rope_scaling_type}")
+
+
+    def _preproces_qkv(self,
+                       x: torch.Tensor,
+                       position_ids: torch.Tensor,
+                       past_key_value: Optional[Tuple[torch.Tensor]]=None,
+                       use_kv_cache: Optional[bool]=False,
+        ):
         bsz, seqlen, _ = x.shape
         
         # QKV
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        query_states = self.q_proj(x).view(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states   = self.k_proj(x).view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = self.v_proj(x).view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        xq = xq.view(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
-        xk = xk.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        xv = xv.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = xk.shape[-2]
-        if past_key_values is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_values.get_usable_length(kv_seq_len, self.layer_idx)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value[0].shape[-2]
+        
+        key_states_cat = key_states
+        if past_key_value is not None:
+            key_states_cat = torch.cat([past_key_value[0], key_states], dim=2)
 
         # RoPE relative positional embeddings
-        # cos, sin = self.rotary_emb(xv, seq_len=kv_seq_len)
-        xq, xk = apply_rotary_pos_emb(xq, xk, freq_cos, freq_sin, position_ids)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states_cat, cos, sin, 
+                                                        seqlen, position_ids)
+        
+        if past_key_value is not None:
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
-        if past_key_values is not None:
-            cache_kwargs = {"sin": freq_cos, "cos": freq_sin}  # Specific to RoPE models
-            xk, xv = past_key_values.update(xk, xv, self.layer_idx, cache_kwargs)
+        new_past_key_value = None
+        if use_kv_cache or past_key_value is not None:
+            new_past_key_value = (key_states, value_states, cos, sin)
 
         # grouped multiquery attention: expand out keys and values
-        # 有没有这里都没有任何区别
-        xk = repeat_kv(xk, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim)
-        xv = repeat_kv(xv, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim) 
+        key_states = repeat_kv(key_states, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim)
+        value_states = repeat_kv(value_states, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim) 
 
+        return (query_states, key_states, value_states), new_past_key_value
+    
+    def _forward(
+        self,
+        x: torch.Tensor,
+        position_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]]=None,
+        use_kv_cache: Optional[bool]=False,
+    ):
+        bsz, seqlen, _ = x.shape
+        
+        qkv_out, new_past_key_value = self._preproces_qkv(x, position_ids, past_key_value, use_kv_cache)
+        query_states, key_states, value_states = qkv_out[0], qkv_out[1], qkv_out[2]
+        
         # flash implementation
         if self.flash:
-            output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None, 
+            output = torch.nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=None, 
                                                                       dropout_p=self.dropout if self.training else 0.0, is_causal=True)
         else:
             # manual implementation
-            attn_weights = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
             if attention_mask is not None:
                 if attention_mask[:, :, :seqlen, :seqlen].size() != attn_weights.size():
@@ -135,64 +186,39 @@ class Attention(nn.Module):
                 
                 attn_weights = attn_weights + attention_mask[:, :, :seqlen, :seqlen]
 
-            attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(xq)
+            attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(query_states)
             attn_weights = self.attn_dropout(attn_weights)
-            output = torch.matmul(attn_weights, xv)  # (bs, num_heads, seqlen, head_dim)
+            output = torch.matmul(attn_weights, value_states)  # (bs, num_heads, seqlen, head_dim)
 
         # restore time as batch dimension and concat heads
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
 
         # final projection into the residual stream
         output = self.wo(output)
-        return self.resid_dropout(output), past_key_values
+
+        return self.resid_dropout(output), new_past_key_value
 
     def forward_flashattn(
         self,
         x: torch.Tensor,
-        freq_cos, freq_sin,
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]]=None,
+        past_key_value: Optional[Tuple[torch.Tensor]]=None,
+        use_kv_cache: Optional[bool]=False,
     ):
         bsz, seqlen, _ = x.shape
         
-        # QKV
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        qkv_out, new_past_key_value = self._preproces_qkv(x, position_ids, past_key_value, use_kv_cache)
+        query_states, key_states, value_states = qkv_out[0], qkv_out[1], qkv_out[2]
 
-        xq = xq.view(bsz, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
-        xk = xk.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        xv = xv.view(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = xk.shape[-2]
-        if past_key_values is not None:
-            if self.layer_idx is None:
-                raise ValueError(
-                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
-                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
-                    "with a layer index."
-                )
-            kv_seq_len += past_key_values.get_usable_length(kv_seq_len, self.layer_idx)
-
-        # RoPE relative positional embeddings
-        xq, xk = apply_rotary_pos_emb(xq, xk, freq_cos, freq_sin, position_ids)
-
-        if past_key_values is not None:
-            cache_kwargs = {"sin": freq_cos, "cos": freq_sin}  # Specific to RoPE models
-            xk, xv = past_key_values.update(xk, xv, self.layer_idx, cache_kwargs)
-
-        # grouped multiquery attention: expand out keys and values
-        # 有没有这里都没有任何区别
-        xk = repeat_kv(xk, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim)
-        xv = repeat_kv(xv, self.num_kv_rep_groups)  # (bs, num_heads, seqlen, head_dim) 
-
-        xq = xq.transpose(1, 2)  # (bs, seqlen, num_heads, head_dim)
-        xk = xk.transpose(1, 2)
-        xv = xv.transpose(1, 2)
+        query_states = query_states.transpose(1, 2)  # (bs, seqlen, num_heads, head_dim)
+        key_states   = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
     
         from flash_attn import flash_attn_func, flash_attn_qkvpacked_func
-        output = flash_attn_func(xq, xk, xv, self.dropout, causal=True)
+        output = flash_attn_func(query_states, key_states, value_states, self.dropout, causal=True)
 
-        # qkv = torch.stack((xq, xk, xv), 2)
+        # qkv = torch.stack((query_states, key_states, value_states), 2)
         # output = flash_attn_qkvpacked_func(qkv, self.dropout, causal=True)
 
         # restore time as batch dimension and concat heads
@@ -200,52 +226,29 @@ class Attention(nn.Module):
         
         # final projection into the residual stream
         output = self.wo(output)
-        return self.resid_dropout(output), past_key_values
+
+        return self.resid_dropout(output), new_past_key_value
 
     # from https://github.com/dvlab-research/LongLoRA
     def shift_short_attn_forward_flashattn(
         self,
         x: torch.Tensor,
-        freq_cos, freq_sin,
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        past_key_values: Optional[List[torch.FloatTensor]]=None,
+        past_key_value: Optional[Tuple[torch.Tensor]]=None,
+        use_kv_cache: Optional[bool]=False,
     ):
         from flash_attn.bert_padding import pad_input, unpad_input
         from flash_attn.flash_attn_interface import flash_attn_varlen_qkvpacked_func
     
         """Input shape: Batch x Time x Channel
 
-        attention_mask: [bsz, q_len]
+        attention_mask: [bsz, seqlen]
         """
-        bsz, q_len, _ = x.size()
+        bsz, seqlen, _ = x.size()
 
-        query_states, key_states, value_states = self.wq(x), self.wk(x), self.wv(x)
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states   = key_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_values is not None:
-            kv_seq_len += past_key_values[0].shape[-2]
-
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, freq_cos, freq_sin, position_ids
-        )
-
-        # Past Key value support
-        if past_key_values is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_values[0], key_states], dim=2)
-            value_states = torch.cat([past_key_values[1], value_states], dim=2)
-
-        past_key_values = (key_states, value_states) if use_cache else None
-
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_kv_rep_groups)
-        value_states = repeat_kv(value_states, self.num_kv_rep_groups)
+        qkv_out, new_past_key_value = self._preproces_qkv(x, position_ids, past_key_value, use_kv_cache)
+        query_states, key_states, value_states = qkv_out[0], qkv_out[1], qkv_out[2]
 
         # Flash attention codes from
         # https://github.com/HazyResearch/flash-attention/blob/main/flash_attn/flash_attention.py
@@ -254,7 +257,7 @@ class Attention(nn.Module):
         qkv = torch.stack(
             [query_states, key_states, value_states], dim=2
         )  # [bsz, nh, 3, q_len, hd]
-        qkv = qkv.transpose(1, 3)  # [bsz, q_len, 3, nh, hd]
+        qkv = qkv.transpose(1, 3)  # [bsz, seqlen, 3, nh, hd]
 
         # We have disabled _prepare_decoder_attention_mask in LlamaModel
         # the attention_mask should be the same as the key_padding_mask
@@ -271,67 +274,45 @@ class Attention(nn.Module):
         )
         output = rearrange(
             pad_input(
-                rearrange(output_unpad, "nnz h d -> nnz (h d)"), indices, bsz, q_len
+                rearrange(output_unpad, "nnz h d -> nnz (h d)"), indices, bsz, seqlen
             ),
             "b s (h d) -> b s h d",
             h=nheads,
         )
-        output = output.reshape(bsz, q_len, self.num_heads, self.head_dim)
+        output = output.reshape(bsz, seqlen, self.num_heads, self.head_dim)
 
-        return self.wo(rearrange(output, "b s h d -> b s (h d)")), past_key_values
+        return self.wo(rearrange(output, "b s h d -> b s (h d)")), new_past_key_value
+        
     
     # from https://github.com/dvlab-research/LongLoRA
     def shift_short_attn_forward_noflashattn(
         self,
         x: torch.Tensor,
-        freq_cos, freq_sin,
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        use_cache: bool = False,
-        past_key_values: Optional[List[torch.FloatTensor]]=None,
+        past_key_value: Optional[Tuple[torch.Tensor]]=None,
+        use_kv_cache: Optional[bool]=False,
     ):
-        bsz, q_len, _ = x.size()
+        bsz, seqlen, _ = x.size()
        
-        query_states, key_states, value_states = self.wq(x), self.wk(x), self.wv(x)
-
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_values is not None:
-            kv_seq_len += past_key_values[0].shape[-2]
-
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, freq_cos, freq_sin, position_ids
-        )
-        
-        if past_key_values is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_values[0], key_states], dim=2)
-            value_states = torch.cat([past_key_values[1], value_states], dim=2)
-
-        past_key_values = (key_states, value_states) if use_cache else None
-
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_kv_rep_groups)
-        value_states = repeat_kv(value_states, self.num_kv_rep_groups)
+        qkv_out, new_past_key_value = self._preproces_qkv(x, position_ids, past_key_value, use_kv_cache)
+        query_states, key_states, value_states = qkv_out[0], qkv_out[1], qkv_out[2]
 
         # shift
-        def shift(qkv, bsz, q_len, group_size, num_heads, head_dim):
+        def shift(qkv, bsz, seqlen, group_size, num_heads, head_dim):
             qkv[:, num_heads // 2:] = qkv[:, num_heads // 2:].roll(-group_size // 2, dims=2)
-            qkv = qkv.transpose(1, 2).reshape(bsz * (q_len // group_size), group_size, num_heads, head_dim).transpose(1, 2)
+            qkv = qkv.transpose(1, 2).reshape(bsz * (seqlen // group_size), group_size, num_heads, head_dim).transpose(1, 2)
             return qkv
 
-        group_size = int(q_len * self.group_size_ratio)
+        group_size = int(seqlen * self.group_size_ratio)
 
-        if q_len % group_size > 0:
-            raise ValueError("q_len %d should be divisible by group size %d."%(q_len, group_size))
-        num_group = q_len // group_size
+        if seqlen % group_size > 0:
+            raise ValueError("seqlen %d should be divisible by group size %d."%(seqlen, group_size))
+        num_group = seqlen // group_size
 
-        query_states = shift(query_states, bsz, q_len, group_size, self.num_heads, self.head_dim)
-        key_states = shift(key_states, bsz, q_len, group_size, self.num_heads, self.head_dim)
-        value_states = shift(value_states, bsz, q_len, group_size, self.num_heads, self.head_dim)
+        query_states = shift(query_states, bsz, seqlen, group_size, self.num_heads, self.head_dim)
+        key_states = shift(key_states, bsz, seqlen, group_size, self.num_heads, self.head_dim)
+        value_states = shift(value_states, bsz, seqlen, group_size, self.num_heads, self.head_dim)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -360,43 +341,51 @@ class Attention(nn.Module):
             )
         attn_output = attn_output.transpose(1, 2).contiguous()
 
-        attn_output = attn_output.reshape(bsz, q_len, self.num_heads, self.head_dim)
+        attn_output = attn_output.reshape(bsz, seqlen, self.num_heads, self.head_dim)
 
         # shift back
         attn_output[:, :, self.num_heads//2:] = attn_output[:, :, self.num_heads//2:].roll(group_size//2, dims=1)
-        attn_output = attn_output.reshape(bsz, q_len, -1)
+        attn_output = attn_output.reshape(bsz, seqlen, -1)
 
         attn_output = self.wo(attn_output)
-        return self.resid_dropout(attn_output), past_key_values
+
+        return self.resid_dropout(attn_output), new_past_key_value
     
     def forward(
         self,
         x: torch.Tensor,
-        freq_cos, freq_sin,
         position_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]]=None,
+        past_key_value: Optional[Tuple[torch.Tensor]]=None,
+        use_kv_cache: Optional[bool]=False,
     ):
         _, seqlen, _ = x.shape
         group_size = int(seqlen * self.group_size_ratio)
         if self.use_shift_short_attn and seqlen >= self.use_ssa_min_seq and seqlen % group_size == 0:
             if self.flash_attention:
-                output, past_key_values = self.shift_short_attn_forward_flashattn(x, freq_cos, freq_sin, 
-                                                                 position_ids, attention_mask, 
-                                                                 past_key_values)
+                output, past_key_value = self.shift_short_attn_forward_flashattn(x, 
+                                                                                position_ids, 
+                                                                                attention_mask, 
+                                                                                past_key_value,
+                                                                                use_kv_cache)
             else:
-                output, past_key_values = self.shift_short_attn_forward_noflashattn(x, freq_cos, freq_sin, 
-                                                                   position_ids, attention_mask, 
-                                                                   past_key_values)
+                output, past_key_value = self.shift_short_attn_forward_noflashattn(x, 
+                                                                                    position_ids, 
+                                                                                    attention_mask, 
+                                                                                    past_key_value,
+                                                                                    use_kv_cache)
         else:
             if self.flash_attention:
-                output, past_key_values = self.forward_flashattn(x, freq_cos, freq_sin, 
-                                                position_ids, 
-                                                attention_mask, 
-                                                past_key_values)
+                output, past_key_value = self.forward_flashattn(x,
+                                                                position_ids, 
+                                                                attention_mask, 
+                                                                past_key_value,
+                                                                use_kv_cache)
             else:
-                output, past_key_values = self._forward(x, freq_cos, freq_sin, 
-                                       position_ids, attention_mask, 
-                                       past_key_values)
+                output, past_key_value = self._forward(x,
+                                                        position_ids, 
+                                                        attention_mask, 
+                                                        past_key_value,
+                                                        use_kv_cache)
         
-        return output, past_key_values
+        return output, past_key_value

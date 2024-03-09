@@ -27,12 +27,12 @@ merge_lora_on_load: False
 
 model_params:
   dim: 1536
-  n_layers: 22
+  n_layers: 18
   n_heads: 12        # 要能被dim整除
   n_kv_heads: 2      # 0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA
   multiple_of: 32
   rope_scaling_factor: 1.0
-  rope_scaling_type: 'linear'  # linear/dynamic
+  rope_scaling_type: 'linear'  # linear/dynamic/clex
   dropout: 0.0
   norm_eps: 0.00001
   use_bias: False
@@ -48,9 +48,9 @@ model_params:
 train_params:
   use_deepspeed: True
   max_epoch: 2
-  eval_interval: 1
-  log_interval: 200
-  eval_iters: 200
+  log_iters: 200
+  save_iters: 20000
+  eval_iters: 20000
   eval_only: False
   always_save_ckpt: True
   init_from: 'scratch'

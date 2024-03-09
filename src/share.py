@@ -166,19 +166,20 @@ def init_ddp(ddp, opt):
 
 
 @torch.no_grad()
-def valid_epoch(model, val_loader, opt, logger, ctx=None):
+def valid_model(model, val_loader, logger, ctx=None):
     losses = []
     model.eval()
-    for epoch in range(opt.max_epoch):
-        for _, (X, Y) in enumerate(val_loader):
-            X=X.to(opt.device)
-            Y=Y.to(opt.device)
-            if ctx is not None:
-                with ctx:
-                    _, loss, _ = model(X, Y)
-            else:
-                _, loss, _ = model(X, Y)
-            losses.append(loss.item())
+
+    for _, (X, Y) in enumerate(val_loader):
+        X=X.to(model.device)
+        Y=Y.to(model.device)
+        if ctx is not None:
+            with ctx:
+                output = model(X, Y)
+        else:
+            output = model(X, Y)
+        losses.append(output.loss.item())
+
     model.train()
     val_loss=np.mean(losses)
     

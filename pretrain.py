@@ -13,10 +13,14 @@ from setting import *
 
 #To run with DDP on 4 gpus on 1 node, example:
 # torchrun --standalone --nproc_per_node=4 pretrain.py OR python -m torch.distributed.launch --nproc_per_node=4 pretrain.py
-def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
+def pretrain_epoch(epoch, model_opt, raw_model,
+                   train_loader, val_loader, 
+                   scaler, optimizer, 
+                   opt, ctx, master_process):
+    
     start_time=time.time()
     iter_per_epoch=len(train_loader)
-
+    best_val_loss = 1e9
     ave_time = []
     for step, (X, Y) in enumerate(train_loader):
         single_time_start=time.time()
@@ -31,6 +35,7 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
             output = model_opt(X, Y)
             model_opt.backward(output.loss)
             model_opt.step()
+            loss = output.loss
         else:
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
@@ -69,8 +74,24 @@ def pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx):
             del(ave_time[0])
         # print(f'model train ave time: {round(mean(ave_time),6)} s')
 
+        if step > 0 and step %opt.eval_iters == 0:
+            val_loss=valid_model(model_opt, val_loader, logger, ctx)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
+                
+                if master_process:  #一般用0，当然，可以选任意的rank保存。
+                    save_model(raw_model, '{}/best.pth'.format(save_dir), opt.merge_lora_to_save)
+
+
+        if step > 0 and step %opt.save_iters == 0:
+            if master_process:  #一般用0，当然，可以选任意的rank保存。
+                save_model(raw_model, '{}/epoch_{}_step{}.pth'.format(save_dir,epoch, step), opt.merge_lora_to_save)
+            # model_opt.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
+        
+
         #打印日志
-        if step % opt.log_interval == 0:
+        if step % opt.log_iters == 0:
             spend_time=time.time()-start_time
             logger.info(
                     'Epoch:[{}/{}] ({}/{}) loss:{:.3f} lr:{:.7f}  epoch_time: {} min.'.format(
@@ -177,9 +198,12 @@ def pretrain_model(opt):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
-        pretrain_epoch(epoch, model_opt, train_loader, scaler, optimizer, opt, ctx)
-        val_loss=valid_epoch(model, val_loader, opt, logger, ctx)
-
+        pretrain_epoch(epoch, model_opt, model,
+                       train_loader, val_loader, 
+                       scaler, optimizer, 
+                       opt, ctx, master_process)
+        
+        val_loss=valid_model(model_opt, val_loader, logger, ctx)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
@@ -187,15 +211,10 @@ def pretrain_model(opt):
             if master_process:  #一般用0，当然，可以选任意的rank保存。
                 save_model(model, '{}/best.pth'.format(save_dir), opt.merge_lora_to_save)
 
-            # client_sd=dict()
-            # client_sd['step'] = epoch
-            # ckpt_id = val_loss
-            # model_opt.save_checkpoint('{}/best.pth'.format(save_dir), ckpt_id, client_sd = client_sd)
-
         if master_process:  #一般用0，当然，可以选任意的rank保存。
             save_model(model, '{}/epoch_{}.pth'.format(save_dir,epoch), opt.merge_lora_to_save)
         # model_opt.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
-    
+
     if ddp:
         destroy_process_group()
     

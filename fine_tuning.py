@@ -15,10 +15,13 @@ from src.utils import *
 from setting import *
 
 
-def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger):
+def sft_epoch(epoch,model_opt, raw_model,
+              train_loader, val_loader, 
+              optimizer,scaler,
+              ddp, opt,ctx,logger, master_process):
     iter_per_epoch=len(train_loader)
     start_time=time.time()
-    
+    best_val_loss = 1e9
     ave_time = []
     for step, (X, Y, loss_mask) in enumerate(train_loader):
         single_time_start=time.time()
@@ -79,8 +82,24 @@ def sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger):
             del(ave_time[0])
         # print(f'model train ave time: {round(mean(ave_time),6)} s')
 
+        if step > 0 and step % opt.eval_iters == 0:
+            val_loss=valid_model(model_opt, val_loader, logger, ctx)
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
+                
+                if master_process:  #一般用0，当然，可以选任意的rank保存。
+                    save_model(raw_model, '{}/best.pth'.format(save_dir), opt.merge_lora_to_save)
+
+
+        if step > 0 and step %opt.save_iters == 0:
+            if master_process:  #一般用0，当然，可以选任意的rank保存。
+                save_model(raw_model, '{}/epoch_{}_step{}.pth'.format(save_dir,epoch,step), opt.merge_lora_to_save)
+            # model_opt.save_checkpoint('{}/epoch_{}.pth'.format(save_dir,epoch), ckpt_id, client_sd = client_sd)
+        
+
         #打印日志
-        if step % opt.log_interval == 0:
+        if step % opt.log_iters == 0:
             spend_time=time.time()-start_time
             logger.info(
                     'Epoch:[{}/{}] ({}/{}) loss:{:.3f} lr:{:.7f}  epoch_time: {} min.'.format(
@@ -200,9 +219,12 @@ def ft_model(opt, model_name_path):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
     
-        sft_epoch(epoch,ddp,opt,train_loader,optimizer,model_opt,scaler,ctx,logger)
-        val_loss=valid_epoch(model, val_loader, opt, logger, ctx)
-
+        sft_epoch(epoch,model_opt, model, 
+                  train_loader, val_loader, 
+                  optimizer,scaler,
+                  ddp,opt,ctx,logger, master_process)
+        
+        val_loss=valid_model(model, val_loader, logger, ctx)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))

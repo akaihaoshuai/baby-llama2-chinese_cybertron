@@ -1,6 +1,6 @@
 import math
 import struct
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import numpy as np
 import torch
@@ -19,8 +19,8 @@ class JerryTransformerBlock(nn.Module):
         self.n_heads = params.n_heads
         self.dim = params.dim
         self.head_dim = params.dim // params.n_heads
-        self.attention = Attention(params, layer_idx)
-        self.feed_forward = FeedForward(
+        self.self_attn = Attention(params, layer_idx)
+        self.mlp = FeedForward(
             dim=params.dim,
             hidden_dim=4 * params.dim,
             multiple_of=params.multiple_of,
@@ -28,25 +28,26 @@ class JerryTransformerBlock(nn.Module):
             dropout=params.dropout,
         )
         self.layer_idx = layer_idx
-        self.attention_norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.ffn_norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.input_layernorm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.post_layernorm = RMSNorm(params.dim, eps=params.norm_eps)
 
-    def forward(self, hidden_status, 
-                freq_cos, freq_sin, 
+    def forward(self, 
+                hidden_status, 
                 position_ids,
                 attention_mask: Optional[torch.Tensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]]=None,
+                past_key_value: Optional[Tuple[torch.Tensor]]=None,
+                use_kv_cache: Optional[bool]=False,
                 ):
         src_hidden_status = hidden_status
-        hidden_status, past_key_values = self.attention.forward(self.attention_norm(hidden_status), 
-                                                                freq_cos, freq_sin, 
-                                                                position_ids=position_ids,
-                                                                attention_mask=attention_mask,
-                                                                past_key_values=past_key_values)
+        hidden_status, past_key_value = self.self_attn.forward(self.input_layernorm(hidden_status), 
+                                                               position_ids=position_ids,
+                                                               attention_mask=attention_mask,
+                                                               past_key_value=past_key_value,
+                                                               use_kv_cache=use_kv_cache)
         hidden_status = src_hidden_status + hidden_status
 
-        hidden_status = hidden_status + self.feed_forward.forward(self.ffn_norm(hidden_status))
-        return hidden_status, past_key_values
+        hidden_status = hidden_status + self.mlp.forward(self.post_layernorm(hidden_status))
+        return hidden_status, past_key_value
 
 
 class Jerry(nn.Module):
@@ -56,11 +57,6 @@ class Jerry(nn.Module):
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
-        self.rope_beta = params.rope_beta
-        self.max_position_embeddings = params.max_seq_len
-        self.rope_scaling_factor = params.rope_scaling_factor
-        self.rope_scaling_type = params.rope_scaling_type
-        self.head_dim = params.dim // params.n_heads
         self.train_flag = train_flag
         self.flash_attention = params.flash_attention
 
@@ -87,8 +83,6 @@ class Jerry(nn.Module):
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
 
         self.sampler = Sampler()
-
-        self._init_rope(params)
         self.attention_mask= None
 
         if not self.flash_attention:
@@ -101,32 +95,7 @@ class Jerry(nn.Module):
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
     
-    # from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
-    def _init_rope(self, params):
-        if self.rope_scaling_factor <= 1.0:
-            self.rotary_emb = RotaryEmbedding(
-                self.head_dim,
-                max_position_embeddings=self.max_position_embeddings,
-                base=self.rope_beta,
-            )
-        else:
-            if self.rope_scaling_type == "linear":
-                self.rotary_emb = LinearScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=self.rope_scaling_factor,
-                    base=self.rope_beta,
-                )
-            elif self.rope_scaling_type == "dynamic":
-                self.rotary_emb = DynamicNTKScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=self.rope_scaling_factor,
-                    base=self.rope_beta,
-                )
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {self.rope_scaling_type}")
-            
+    
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -144,17 +113,14 @@ class Jerry(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, 
                 targets: Optional[torch.Tensor] = None,
-                past_key_values: Optional[List[torch.FloatTensor]]=None,
+                past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None,
                 use_kv_cache: Optional[bool]=False,
                 ):
         _bsz, seqlen = input_ids.shape
 
-        past_key_values_length = 0
-        if use_kv_cache:
-            from transformers.cache_utils import DynamicCache
-            if past_key_values is None:  # create
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_key_values_length = past_key_values.get_usable_length(seqlen)
+        past_key_value_length = 0
+        if past_key_values is not None and len(past_key_values) == self.n_layers: 
+            past_key_value_length = past_key_values[0][0].shape[2]
 
         if self.train_flag and self.use_neftune:
             hidden_states = self.neftune_embedding(input_ids)
@@ -162,24 +128,31 @@ class Jerry(nn.Module):
             hidden_states = self.tok_embeddings(input_ids)
 
         hidden_states = self.dropout(hidden_states)
-        position_ids = torch.arange(seqlen+past_key_values_length, dtype=torch.long, device=input_ids.device)
+        position_ids = torch.arange(seqlen+past_key_value_length, dtype=torch.long, device=input_ids.device)
         position_ids = position_ids.unsqueeze(0)
-        freq_cos, freq_sin = self.rotary_emb(hidden_states, seq_len=hidden_states.shape[1])
 
         if not self.flash_attention and not self.flash:
-            self.attention_mask = torch.full((_bsz, 1, seqlen+past_key_values_length, 
-                                              seqlen+past_key_values_length), float("-inf"))
+            self.attention_mask = torch.full((_bsz, 1, seqlen+past_key_value_length, 
+                                              seqlen+past_key_value_length), float("-inf"))
             self.attention_mask = torch.triu(self.attention_mask, diagonal=1)
         else:
-            self.attention_mask = torch.ones((_bsz, seqlen+past_key_values_length), dtype=torch.long)
+            self.attention_mask = torch.ones((_bsz, seqlen+past_key_value_length), dtype=torch.long)
 
+        new_past_key_values = []
+        for idx, layer in enumerate(self.layers):
+            if past_key_values is not None and len(past_key_values) == self.n_layers: 
+                past_key_value = past_key_values[idx]
+            else:
+                past_key_value = None
 
-        for layer in self.layers:
-            hidden_states, past_key_values = layer(hidden_states, 
-                                                freq_cos, freq_sin, 
-                                                position_ids=position_ids, 
-                                                attention_mask=self.attention_mask, 
-                                                past_key_values=past_key_values)
+            hidden_states, past_key_value = layer(hidden_states, 
+                                                  position_ids=position_ids, 
+                                                  attention_mask=self.attention_mask, 
+                                                  past_key_value=past_key_value,
+                                                  use_kv_cache=use_kv_cache)
+            if use_kv_cache:
+                new_past_key_values.append(past_key_value)
+                
         hidden_states = self.norm(hidden_states)
 
         if targets is not None:
@@ -192,14 +165,14 @@ class Jerry(nn.Module):
                                   ppl_loss=ppl_loss, 
                                   logits=logits, 
                                   hidden_states=hidden_states, 
-                                  past_key_values=past_key_values)
+                                  past_key_values=new_past_key_values)
         else:
             # inference-time mini-optimization: only forward the output on the very last position
             logits = self.output(hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
 
             return LLMModelOutput(logits=logits, 
                                   hidden_states=hidden_states, 
-                                  past_key_values=past_key_values)
+                                  past_key_values=new_past_key_values)
 
 
     def print_params(self):

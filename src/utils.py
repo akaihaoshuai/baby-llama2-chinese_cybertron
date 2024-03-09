@@ -89,5 +89,6 @@ def save_model(model, path, save_type='all', merge_lora=False):
             lora_only = {k: model_state_dict[k] for k in model_state_dict if 'lora_' in k and model_state_dict[k] is not None}
             torch.save(lora_only, path.replace('.pth', '.lora'))
         else:
+            model_state_dict = model.state_dict()
             state_dict = {k: model_state_dict[k] for k in model_state_dict if model_state_dict[k] is not None}
             torch.save(state_dict, path)

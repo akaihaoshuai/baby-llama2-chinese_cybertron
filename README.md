@@ -5,21 +5,21 @@
 
 
 ## 更新记录
+>2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。https://zhuanlan.zhihu.com/p/684907262
+
 >2024.03.02：支持LoRA训练，根据LongLoRA优化代码，支持SS-Attn
 
 >2024.02.29：支持长度外推，from LLaMA。 https://zhuanlan.zhihu.com/p/683731440
 
 >2024.02.24：支持deepspeed训练。https://zhuanlan.zhihu.com/p/683768690
 
->2023.11.02：增加训练tokenizer代码，扩展数据。
+>2023.11.02：增加训练tokenizer代码，扩展数据。https://zhuanlan.zhihu.com/p/664046612?utm_psn=1702755988845731840
 
 >2023.10.21：测试falsh attention
 
->2023.10.13：fork代码。https://zhuanlan.zhihu.com/p/660759033
+>2023.10.13：fork代码，训练实战。https://zhuanlan.zhihu.com/p/660759033
 
 
-
-具体内容可以参考知乎系列文章：https://zhuanlan.zhihu.com/p/660759033
 
 
 

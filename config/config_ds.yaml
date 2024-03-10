@@ -44,6 +44,11 @@ model_params:
   use_shift_short_attn: False
   group_size_ratio: 0.25
   use_ssa_min_seq: 8192  # 2048*4
+  cache_type: 'recent'  # all/recent
+  cache_start_size: 10
+  cache_recent_size: 10
+  use_neftune: True
+  neftune_noise_alpha: 0.1
 
 train_params:
   use_deepspeed: True
@@ -68,8 +73,6 @@ train_params:
   backend: 'nccl'
   device: 'cuda'
   compile: False
-  use_neftune: True
-  neftune_noise_alpha: 0.1
 
   
 fine_tuning_params:

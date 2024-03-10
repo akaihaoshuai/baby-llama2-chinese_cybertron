@@ -39,7 +39,19 @@ def get_parser_args():
     parser.add_argument('--use_shift_short_attn', type=bool, default=False)
     parser.add_argument('--group_size_ratio', type=float, default=0.25)
     parser.add_argument('--use_ssa_min_seq', type=int, default=8192)
-    
+    parser.add_argument('--cache_type', type=str, default="recent", choices=['recent', 'all'])
+    parser.add_argument('--cache_start_size', type=int, default=10)
+    parser.add_argument('--cache_recent_size', type=int, default=2048)
+    parser.add_argument("--use_neftune", type=bool, default=True)
+    parser.add_argument("--neftune_noise_alpha", type=float, default=0.1)
+    # finetune
+    parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
+    parser.add_argument('--lora_mudule', type=str, default="all", choices=['linear', 'embedding', 'all'])
+    parser.add_argument("--lora_attn_dim", type=int, default=8)
+    parser.add_argument("--lora_attn_alpha", type=int, default=128)
+    parser.add_argument("--lora_dropout", type=float, default=0.0)
+    parser.add_argument("--lora_r_dropout", type=float, default=0.0)
+
     parser.add_argument('--merge_lora_to_save', type=bool, default=False, help="merge_lora_to_save")
     parser.add_argument('--merge_lora_on_load', type=bool, default=False, help="merge_lora_on_load")
 
@@ -62,16 +74,8 @@ def get_parser_args():
     parser.add_argument("--decay_lr", type=bool, default=True)
     parser.add_argument("--warmup_iters", type=int, default=1000)
     parser.add_argument("--lr_decay_iters", type=int, default=80000)
-    parser.add_argument("--use_neftune", type=bool, default=True)
-    parser.add_argument("--neftune_noise_alpha", type=float, default=0.1)
 
-    # fine_tuning params
-    parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
-    parser.add_argument('--lora_mudule', type=str, default="all", choices=['linear', 'embedding', 'all'])
-    parser.add_argument("--lora_attn_dim", type=int, default=8)
-    parser.add_argument("--lora_attn_alpha", type=int, default=128)
-    parser.add_argument("--lora_dropout", type=float, default=0.0)
-    parser.add_argument("--lora_r_dropout", type=float, default=0.0)
+
 
     # learning rate decay settings
     parser.add_argument("--min_lr", type=float, default=1e-5)
@@ -126,9 +130,14 @@ def parser_model_config(opt):
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)
         opt.model_type = model_params_yaml.get('model_type', opt.model_type)
+        opt.use_neftune = model_params_yaml.get('use_neftune', opt.use_neftune)
+        opt.neftune_noise_alpha = model_params_yaml.get('neftune_noise_alpha', opt.neftune_noise_alpha)
         opt.use_shift_short_attn = model_params_yaml.get('use_shift_short_attn', opt.use_shift_short_attn)
         opt.group_size_ratio = model_params_yaml.get('group_size_ratio', opt.group_size_ratio)
         opt.use_ssa_min_seq = model_params_yaml.get('use_ssa_min_seq', opt.use_ssa_min_seq)
+        opt.cache_type = model_params_yaml.get('cache_type', opt.cache_type)
+        opt.cache_start_size = model_params_yaml.get('cache_start_size', opt.cache_start_size)
+        opt.cache_recent_size = model_params_yaml.get('cache_recent_size', opt.cache_recent_size)
 
     return opt,config
 
@@ -171,8 +180,6 @@ def parser_other_config_except_model(opt):
         opt.decay_lr = train_params_yaml.get('decay_lr', opt.decay_lr)
         opt.warmup_iters = train_params_yaml.get('warmup_iters', opt.warmup_iters)
         opt.lr_decay_iters = train_params_yaml.get('lr_decay_iters', opt.lr_decay_iters)
-        opt.use_neftune = train_params_yaml.get('use_neftune', opt.use_neftune)
-        opt.neftune_noise_alpha = train_params_yaml.get('neftune_noise_alpha', opt.neftune_noise_alpha)
         opt.min_lr = train_params_yaml.get('min_lr', opt.min_lr)
         opt.backend = train_params_yaml.get('backend', opt.backend)
         opt.device = train_params_yaml.get('device', opt.device)

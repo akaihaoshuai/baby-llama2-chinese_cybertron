@@ -3,6 +3,7 @@ import math
 from contextlib import nullcontext
 import torch
 from src.models.model_loader import _get_model_architecture
+from src.models.model_args import *
 from torch.distributed import init_process_group
 import logging
 import inspect
@@ -87,7 +88,7 @@ def init_model(opt, train_flag=False):
     if opt.init_from == "scratch":
         # init a new model from scratch
         print("Initializing a new model from scratch")
-        model = _get_model_architecture(opt.model_type)(opt, train_flag=train_flag)
+        model = _get_model_architecture(opt.model_type)(get_model_args(opt, train_flag=train_flag))
     elif opt.init_from == "resume":
         print(f"Resuming training from {opt.model_path}")
         # resume training from a checkpoint.
@@ -99,7 +100,7 @@ def init_model(opt, train_flag=False):
         for k in ["dim", "n_layers", "n_heads", "n_kv_heads", "vocab_size", "multiple_of", "max_seq_len"]:
             opt[k] = checkpoint_model_args[k]
         # create the model
-        model = _get_model_architecture(opt.model_type)(opt, train_flag=train_flag)
+        model = _get_model_architecture(opt.model_type)(get_model_args(opt, train_flag=train_flag))
         state_dict = checkpoint["model"]
         # fix the keys of the state dictionary :(
         # honestly no idea how checkpoints sometimes get this prefix, have to debug more

@@ -10,7 +10,7 @@ from src.models.layers.layernorm import RMSNorm
 from src.models.layers.attention import Attention
 from src.models.layers.ffn import FeedForward
 from src.models.layers.position_code import *
-from src.models.model_output import LLMModelOutput
+from src.models.model_args import ModelArgs, LLMModelOutput
 from src.models.layers.sampler import Sampler
 
 class JerryTransformerBlock(nn.Module):
@@ -51,13 +51,13 @@ class JerryTransformerBlock(nn.Module):
 
 
 class Jerry(nn.Module):
-    def __init__(self, params, train_flag=False):
+    def __init__(self, params: ModelArgs):
         super().__init__()
 
         self.params = params
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
-        self.train_flag = train_flag
+        self.is_train = params.is_train
         self.flash_attention = params.flash_attention
 
         self.use_neftune = params.use_neftune
@@ -95,6 +95,16 @@ class Jerry(nn.Module):
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
     
+        self.cache_type = params.cache_type
+        if self.cache_type == 'recent':
+            from src.models.layers.short_recent_kv_cache import StartRecentKVCache
+            self.kv_cache = StartRecentKVCache(
+                start_size=params.cache_start_size,
+                recent_size=params.cache_recent_size,
+                k_seq_dim=2,  # k_seq数据在第几维
+                v_seq_dim=2,
+            )
+
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -122,7 +132,7 @@ class Jerry(nn.Module):
         if past_key_values is not None and len(past_key_values) == self.n_layers: 
             past_key_value_length = past_key_values[0][0].shape[2]
 
-        if self.train_flag and self.use_neftune:
+        if self.is_train and self.use_neftune:
             hidden_states = self.neftune_embedding(input_ids)
         else:
             hidden_states = self.tok_embeddings(input_ids)
@@ -223,11 +233,12 @@ class Jerry(nn.Module):
     #@torch.inference_mode()
     @torch.no_grad()
     def generate(self, input_ids, eos=2, 
-                 max_new_tokens=1024, 
-                 temperature=1.0, 
-                 top_k=10,
-                 top_p=0.4,
-                 use_kv_cache=True):
+                 max_new_tokens : Optional[int] = 1024, 
+                 temperature : Optional[float] = 1.0, 
+                 top_k : Optional[int] = 10,
+                 top_p : Optional[float] = 0.4,
+                 use_kv_cache : Optional[bool] = True,
+                 past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -235,9 +246,14 @@ class Jerry(nn.Module):
         Also note this is a super inefficient version of sampling with no key/value cache.
         """
         
+        if self.cache_type == 'recent' and use_kv_cache and past_key_values is not None:
+            space_needed = input_ids.shape[1] + max_new_tokens
+            past_key_values = self.kv_cache.evict_for_space(past_key_values, space_needed) # 只取需要的缓存
+
         # 预填充
         outputs = self(input_ids=input_ids,
                        use_kv_cache=use_kv_cache,
+                       past_key_values=past_key_values,
                        )
         past_key_values = outputs.past_key_values
         pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)

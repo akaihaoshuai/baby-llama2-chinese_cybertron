@@ -13,7 +13,7 @@
 
 >2024.02.24：支持deepspeed训练。https://zhuanlan.zhihu.com/p/683768690
 
->2023.11.02：增加训练tokenizer代码，扩展数据。https://zhuanlan.zhihu.com/p/664046612?utm_psn=1702755988845731840
+>2023.11.02：增加训练tokenizer代码，扩展数据。https://zhuanlan.zhihu.com/p/664046612
 
 >2023.10.21：测试falsh attention
 

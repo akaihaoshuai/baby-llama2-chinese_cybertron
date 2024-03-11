@@ -6,12 +6,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from src.models.layers.layernorm import RMSNorm
-from src.models.layers.attention import Attention
-from src.models.layers.ffn import FeedForward
-from src.models.layers.position_code import *
+from src.layers.layernorm import RMSNorm
+from src.layers.attention import Attention
+from src.layers.ffn import FeedForward
+from src.layers.position_code import *
 from src.models.model_args import ModelArgs, LLMModelOutput
-from src.models.layers.sampler import Sampler
+from src.layers.sampler import Sampler
+from src.layers.short_recent_kv_cache import StartRecentKVCache
 
 class JerryTransformerBlock(nn.Module):
     def __init__(self, layer_idx: int, params):
@@ -67,7 +68,8 @@ class Jerry(nn.Module):
         vocab_size = ((params.vocab_size + 63) // 64) * 64
 
         self.output = nn.Linear(params.dim, vocab_size, bias=params.use_bias)
-        if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
+        if (params.ft_type == 'lora' or params.lora_path != '') \
+            and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRAEmbedding
             self.tok_embeddings = LoRAEmbedding(vocab_size, params.dim,
                                                 r=params.lora_attn_dim,
@@ -97,7 +99,6 @@ class Jerry(nn.Module):
     
         self.cache_type = params.cache_type
         if self.cache_type == 'recent':
-            from src.models.layers.short_recent_kv_cache import StartRecentKVCache
             self.kv_cache = StartRecentKVCache(
                 start_size=params.cache_start_size,
                 recent_size=params.cache_recent_size,

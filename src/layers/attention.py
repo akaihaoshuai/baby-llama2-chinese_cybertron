@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.models.layers.position_code import *
+from src.layers.position_code.position_code import *
 from typing import Optional, Tuple
 from einops import rearrange
 
@@ -45,7 +45,8 @@ class Attention(nn.Module):
         self.group_size_ratio = params.group_size_ratio
         self.use_ssa_min_seq = params.use_ssa_min_seq
 
-        if (params.ft_type == 'lora' or params.lora_path != '') and (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
+        if (params.ft_type == 'lora' or params.lora_path != '') and \
+            (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRALinear
             self.q_proj = LoRALinear(
                 params.dim, params.n_heads * self.head_dim, 
@@ -66,6 +67,36 @@ class Attention(nn.Module):
                 merge_weights=False
             )
             self.v_proj = LoRALinear(
+                params.dim, self.n_kv_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+        elif (params.ft_type == 'dora' or params.lora_path != '') \
+            and (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
+            from src.loralib.dora_layers import DoRALinear
+            self.q_proj = DoRALinear(
+                params.dim, params.n_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+            self.k_proj = DoRALinear(
+                params.dim, self.n_kv_heads * self.head_dim, 
+                use_bias=params.use_bias,
+                r=params.lora_attn_dim, 
+                lora_alpha=params.lora_attn_alpha, 
+                lora_dropout=params.lora_dropout, 
+                fan_in_fan_out=True,
+                merge_weights=False
+            )
+            self.v_proj = DoRALinear(
                 params.dim, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 

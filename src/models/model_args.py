@@ -12,35 +12,41 @@ class ModelArgs:
     n_kv_heads: Optional[int] = None
     vocab_size: int = -1  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
-    rope_beta: float = 10000.0
-    rope_scaling_factor: float = 1.0
-    rope_scaling_type: str = 'linear'  # linear/dynamic/clex
     norm_eps: float = 1e-5
-    max_seq_len: int = 2048
     dropout: float = 0.0
     use_bias : bool = False
-    flash_attention : bool = False
-    use_shift_short_attn : bool = False
     group_size_ratio : float = 0.25
     use_ssa_min_seq : int = 8192
     dtype : str = 'float16'
     model_type : str = 'Model'
-    cache_type : str = 'recent'   # all/recent
-    cache_start_size : int = 10
-    cache_recent_size : int = 2048
-    use_neftune: bool = True
-    neftune_noise_alpha: float = 0.1
+    
+    flash_attention : bool = False
+    use_shift_short_attn : bool = False
+
+    max_seq_len: int = 2048
+    rope_scaling_type: str = 'linear'  # linear/dynamic/clex
+    rope_beta: float = 10000.0
+    rope_scaling_factor: float = 1.0
+
     is_train: bool = False
     
     # finutune
-    ft_type : str = 'recent'     # full_ft/lora/qlora 
-    lora_mudule : str = 'lora'   # linear/embedding/all
+    ft_type : str = 'full_ft'    # full_ft/lora/qlora/dora
+    lora_mudule : str = 'all'   # linear/embedding/all
     lora_attn_dim : int = 8
     lora_attn_alpha : int = 128
     lora_dropout: float = 0.0
     lora_r_dropout: float = 0.0
     lora_path: str = ''
 
+    # netfune
+    use_neftune: bool = True
+    neftune_noise_alpha: float = 0.1
+
+    # inference cache
+    cache_type : str = 'recent'   # all/recent
+    cache_start_size : int = 10
+    cache_recent_size : int = 1024
 
 def get_model_args(opt, train_flag):
     model_args = dict(

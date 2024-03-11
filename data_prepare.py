@@ -65,30 +65,29 @@ def process_data_v1():
     save_all_text = False  # save_all_text_for_tokenizer
 
     # 中
-    print('process_CLUECorpusSmall.')
-    process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text)
-
-    print('process_wiki_zh_clean.')
-    process_wiki_zh_clean(tokenizer, save_all_text)
-    
-    print('process_baidu.')
-    process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
-
-    # 这个数据集很大
-    print('process_mnbvc.')
-    process_MNBVC(tokenizer, BATCH_SIZE, save_all_text)
-
-    print('process_Chinese-medical-dialogue-data.')
-    process_Chinese_medical_dialogue(tokenizer, BATCH_SIZE, save_all_text)
-
-
-    # 英
-    # 这个数据集很大
-    print('process wikipedia.')
-    process_wiki(tokenizer, BATCH_SIZE, save_all_text)
-
-    print('process_C4.')
-    process_C4(tokenizer, BATCH_SIZE, save_all_text)
+    # print('process_CLUECorpusSmall.')
+    # process_CLUECorpusSmall(tokenizer, BATCH_SIZE, save_all_text)
+    #
+    # print('process_wiki_zh_clean.')
+    # process_wiki_zh_clean(tokenizer, save_all_text)
+    #
+    # print('process_baidu.')
+    # process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
+    #
+    # # 这个数据集很大
+    # print('process_mnbvc.')
+    # process_MNBVC(tokenizer, BATCH_SIZE, save_all_text)
+    #
+    # print('process_Chinese-medical-dialogue-data.')
+    # process_Chinese_medical_dialogue(tokenizer, BATCH_SIZE, save_all_text)
+    #
+    # # 英
+    # # 这个数据集很大
+    # print('process wikipedia.')
+    # process_wiki(tokenizer, BATCH_SIZE, save_all_text)
+    #
+    # print('process_C4.')
+    # process_C4(tokenizer, BATCH_SIZE, save_all_text)
 
     # 代码
     print('process github_code.')

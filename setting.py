@@ -45,7 +45,7 @@ def get_parser_args():
     parser.add_argument("--use_neftune", type=bool, default=True)
     parser.add_argument("--neftune_noise_alpha", type=float, default=0.1)
     # finetune
-    parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora'])
+    parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora', 'dora'])
     parser.add_argument('--lora_mudule', type=str, default="all", choices=['linear', 'embedding', 'all'])
     parser.add_argument("--lora_attn_dim", type=int, default=8)
     parser.add_argument("--lora_attn_alpha", type=int, default=128)

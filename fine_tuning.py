@@ -138,7 +138,9 @@ def ft_model(opt, model_name_path):
     
     # optimizer
     optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
-                                     (opt.beta1, opt.beta2), opt.device, use_fused=opt.ft_type != 'lora')
+                                     (opt.beta1, opt.beta2), 
+                                     opt.optimizer_type, opt.device, 
+                                     use_fused=opt.ft_type != 'lora')
     
     if opt.use_deepspeed:
         import deepspeed

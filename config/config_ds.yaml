@@ -73,6 +73,7 @@ train_params:
   backend: 'nccl'
   device: 'cuda'
   compile: False
+  optimizer_type: 'AdamW' # AdamW/GaLoreAdamW/GaLoreAdamW8bit/GaLoreAdafactor
 
   
 fine_tuning_params:

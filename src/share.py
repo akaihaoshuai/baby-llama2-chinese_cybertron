@@ -2,12 +2,13 @@ import os
 import math
 from contextlib import nullcontext
 import torch
-from src.models.model_loader import _get_model_architecture
-from src.models.model_args import *
 from torch.distributed import init_process_group
 import logging
 import inspect
 import numpy as np
+from src.galore_torch import GaLoreAdamW,GaLoreAdamW8bit,GaLoreAdafactor
+from src.models.model_loader import _get_model_architecture
+from src.models.model_args import *
 
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -50,7 +51,9 @@ def get_lr(it, opt):
 
 # -----------------------------------------------------------------------------
 
-def configure_optimizers(model, weight_decay, learning_rate, betas, device_type, use_fused=True):
+def configure_optimizers(model, weight_decay, learning_rate, 
+                         betas, optimizer_type, 
+                         device_type, use_fused=True):
     # start with all of the candidate parameters
     param_dict = {pn: p for pn, p in model.named_parameters()}
     # filter out those that do not require grad
@@ -70,15 +73,33 @@ def configure_optimizers(model, weight_decay, learning_rate, betas, device_type,
         {'params': decay_params, 'weight_decay': weight_decay},
         {'params': nodecay_params, 'weight_decay': 0.0}
     ]
-    if use_fused:
-        # Create AdamW optimizer and use the fused version if it is available
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"\nusing fused AdamW: {use_fused} \n")
+    if optimizer_type == 'GaLoreAdamW':
+        optimizer = GaLoreAdamW(optim_groups, lr=learning_rate, betas=betas)
+    elif optimizer_type == 'GaLoreAdamW8bit':
+        optimizer = GaLoreAdamW8bit(optim_groups, lr=learning_rate, betas=betas)
+    elif optimizer_type == 'GaLoreAdamW8bit':
+        optimizer = GaLoreAdafactor(
+            optim_groups,
+            lr=learning_rate,
+            eps=(1e-30, 1e-3),
+            clip_threshold=1.0,
+            decay_rate=-0.8,
+            beta1=betas,
+            relative_step=False,
+            scale_parameter=False,
+            warmup_init=False,
+        )
+        optimizer = GaLoreAdamW8bit(optim_groups, lr=learning_rate, betas=betas)
     else:
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+        if use_fused:
+            # Create AdamW optimizer and use the fused version if it is available
+            fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+            use_fused = fused_available and device_type == 'cuda'
+            extra_args = dict(fused=True) if use_fused else dict()
+            optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
+            print(f"\nusing fused AdamW: {use_fused} \n")
+        else:
+            optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
 
     return optimizer
     

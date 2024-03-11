@@ -121,8 +121,11 @@ def pretrain_model(opt):
     model.to(opt.device)
 
     # optimizer
-    optimizer = configure_optimizers(model, opt.weight_decay, opt.learning_rate, 
-                                     (opt.beta1, opt.beta2), opt.device)
+    optimizer = configure_optimizers(model, opt.weight_decay, 
+                                     opt.learning_rate, 
+                                     (opt.beta1, opt.beta2), 
+                                     opt.optimizer_type, 
+                                     opt.device)
     
     if opt.use_deepspeed:
         import deepspeed

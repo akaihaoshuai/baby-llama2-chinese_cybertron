@@ -32,7 +32,7 @@ class ModelArgs:
     
     # finutune
     ft_type : str = 'full_ft'    # full_ft/lora/qlora/dora
-    lora_mudule : str = 'all'   # linear/embedding/all
+    lora_mudule : str = 'all'    # linear/embedding/all
     lora_attn_dim : int = 8
     lora_attn_alpha : int = 128
     lora_dropout: float = 0.0

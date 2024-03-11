@@ -69,10 +69,10 @@ def configure_optimizers(model, weight_decay, learning_rate,
     print(f"[optimizers] num non-decayed parameter tensors {num_nodecay_params} parameters")
     
 
-    optim_groups = [
-        {'params': decay_params, 'weight_decay': weight_decay},
-        {'params': nodecay_params, 'weight_decay': 0.0}
-    ]
+    optim_groups = [{'params': nodecay_params, 'weight_decay': 0.0}, 
+                    {'params': decay_params, 'rank': 128, 'update_proj_gap': 200, 
+                                             'scale': 0.25, 'proj_type': 'std',
+                                             'weight_decay': weight_decay}]
     if optimizer_type == 'GaLoreAdamW':
         optimizer = GaLoreAdamW(optim_groups, lr=learning_rate, betas=betas)
     elif optimizer_type == 'GaLoreAdamW8bit':
@@ -91,6 +91,10 @@ def configure_optimizers(model, weight_decay, learning_rate,
         )
         optimizer = GaLoreAdamW8bit(optim_groups, lr=learning_rate, betas=betas)
     else:
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
         if use_fused:
             # Create AdamW optimizer and use the fused version if it is available
             fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters

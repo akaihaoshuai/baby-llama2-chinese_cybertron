@@ -39,7 +39,7 @@ def tensorboard_logger(loss,epoch):
 def get_lr(it, opt):
     # 1) linear warmup for warmup_iters steps
     if it < opt.warmup_iters:
-        return opt.learning_rate * it / opt.warmup_iters
+        return opt.learning_rate * (it + 1) / opt.warmup_iters
     # 2) if it > lr_decay_iters, return min learning rate
     if it > opt.lr_decay_iters:
         return opt.min_lr

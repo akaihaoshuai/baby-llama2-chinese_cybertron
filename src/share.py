@@ -6,7 +6,6 @@ from torch.distributed import init_process_group
 import logging
 import inspect
 import numpy as np
-from src.galore_torch import GaLoreAdamW,GaLoreAdamW8bit,GaLoreAdafactor
 from src.models.model_loader import _get_model_architecture
 from src.models.model_args import *
 
@@ -74,10 +73,13 @@ def configure_optimizers(model, weight_decay, learning_rate,
                                              'scale': 0.25, 'proj_type': 'std',
                                              'weight_decay': weight_decay}]
     if optimizer_type == 'GaLoreAdamW':
+        from src.galore_torch import GaLoreAdamW
         optimizer = GaLoreAdamW(optim_groups, lr=learning_rate, betas=betas)
     elif optimizer_type == 'GaLoreAdamW8bit':
+        from src.galore_torch import GaLoreAdamW8bit
         optimizer = GaLoreAdamW8bit(optim_groups, lr=learning_rate, betas=betas)
     elif optimizer_type == 'GaLoreAdamW8bit':
+        from src.galore_torch import GaLoreAdafactor
         optimizer = GaLoreAdafactor(
             optim_groups,
             lr=learning_rate,
@@ -89,7 +91,6 @@ def configure_optimizers(model, weight_decay, learning_rate,
             scale_parameter=False,
             warmup_init=False,
         )
-        optimizer = GaLoreAdamW8bit(optim_groups, lr=learning_rate, betas=betas)
     else:
         optim_groups = [
             {'params': decay_params, 'weight_decay': weight_decay},

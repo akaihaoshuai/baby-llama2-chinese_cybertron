@@ -16,8 +16,7 @@ def get_model(opt):
             state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
 
     load_weight(model, state_dict, lora_state_dict, opt.merge_lora_on_load, strict=False)
-
-    model.eval()
+    model=model.half().eval()
     model.to(opt.device)
     if opt.compile:
         print("Compiling the model...")

@@ -111,10 +111,10 @@ def main(opt):
         opt.rope_scaling_type = "linear"
 
     model, tokenizer = get_model(opt)
-
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
-    # import pdb; pdb.set_trace()
+        
+    model=model.half().eval()
     respond = build_generator(model, tokenizer, temperature=opt.temperature, top_p=opt.top_p,
                               max_new_tokens=opt.max_seq_len, use_cache=True)
 

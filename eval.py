@@ -149,7 +149,7 @@ def eval(model_path_name,opt,logger):
 
     load_weight(model, state_dict, lora_state_dict, opt.merge_lora_on_load, strict=False)
 
-    model.eval()
+    model=model.half().eval()
     model.to(opt.device)
     if opt.compile:
         print("Compiling the model...")

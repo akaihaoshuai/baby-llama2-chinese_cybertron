@@ -2,10 +2,10 @@ from torch import nn
 from typing import Type
 import torch.nn as nn
 
-from src.models.Jerry import Jerry
+from src.models.Jerry import JerryForCausalLM
 
 _MODEL_REGISTRY = {
-    "Model": Jerry,
+    "Model": JerryForCausalLM,
 }
 
 def _get_model_architecture(model_type) -> Type[nn.Module]:

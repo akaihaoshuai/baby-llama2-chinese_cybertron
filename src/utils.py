@@ -1,6 +1,7 @@
 import json
 import glob
 import torch
+import torch.nn as nn
 import pandas as pd
 import os
 
@@ -49,6 +50,15 @@ def read_ckpt(model_path_name, lora_path=''):
 
     return model_path, state_dict, lora_path, lora_state_dict
     
+def find_layers(module, layers=[nn.Conv2d, nn.Linear], name=''):
+    if type(module) in layers:
+        return {name: module}
+    res = {}
+    for name1, child in module.named_children():
+        res.update(find_layers(
+            child, layers=layers, name=name + '.' + name1 if name != '' else name1
+        ))
+    return res
 
 def load_weight(model, state_dict, lora_state_dict=None, merge_lora_on_load=False, strict=True):
     # 从预训练权重中更新模型参数

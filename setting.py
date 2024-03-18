@@ -3,8 +3,9 @@ import yaml
 import json
 import math
 
-def get_parser_args():
-    parser = ArgumentParser()
+def get_parser_args(parser=None):
+    if parser is None:
+        parser = ArgumentParser()
     parser.add_argument("--prompt", type=str, default='你好', help="path to config")
     parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
     parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
@@ -32,6 +33,7 @@ def get_parser_args():
     parser.add_argument("--use_bias", type=bool, default=False)
     parser.add_argument("--norm_eps", type=float, default=0.00001)
     parser.add_argument("--flash_attention", type=bool, default=False)
+    parser.add_argument("--load_in_4bit", type=bool, default=False) 
     parser.add_argument("--dtype", type=str, default='float16', help="path to config")
     parser.add_argument("--vocab_size", type=int, default=64793)
     parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
@@ -127,6 +129,7 @@ def parser_model_config(opt):
         opt.norm_eps = model_params_yaml.get('norm_eps', opt.norm_eps)
         opt.use_bias = model_params_yaml.get('use_bias', opt.use_bias)
         opt.flash_attention = model_params_yaml.get('flash_attention', opt.flash_attention)
+        opt.load_in_4bit = model_params_yaml.get('load_in_4bit', opt.load_in_4bit)
         opt.dtype = model_params_yaml.get('dtype', opt.dtype)
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)

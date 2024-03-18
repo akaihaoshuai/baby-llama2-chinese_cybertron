@@ -10,9 +10,11 @@ from src.layers.layernorm import RMSNorm
 from src.layers.attention import Attention
 from src.layers.ffn import FeedForward
 from src.layers.position_code import *
-from src.models.model_args import ModelArgs, LLMModelOutput
+from src.models.model_args import *
 from src.layers.sampler import Sampler
 from src.layers.short_recent_kv_cache import StartRecentKVCache
+from src.utils import find_layers
+from src.gptq.quant import make_quant
 
 class JerryTransformerBlock(nn.Module):
     def __init__(self, layer_idx: int, params):
@@ -60,23 +62,21 @@ class Jerry(nn.Module):
         self.n_layers = params.n_layers
         self.is_train = params.is_train
         self.flash_attention = params.flash_attention
+        self.max_seq_len = params.max_seq_len
+        self.dim = params.dim
 
         self.use_neftune = params.use_neftune
         self.neftune_noise_alpha = params.neftune_noise_alpha
 
-        # vocab_size = self.vocab_size
-        vocab_size = ((params.vocab_size + 63) // 64) * 64
-
-        self.output = nn.Linear(params.dim, vocab_size, bias=params.use_bias)
         if (params.ft_type == 'lora' or params.lora_path != '') \
             and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRAEmbedding
-            self.tok_embeddings = LoRAEmbedding(vocab_size, params.dim,
+            self.tok_embeddings = LoRAEmbedding(params.vocab_size, params.dim,
                                                 r=params.lora_attn_dim,
                                                 lora_alpha=params.lora_attn_alpha,
                                                 merge_weights=False)
         else:
-            self.tok_embeddings = nn.Embedding(vocab_size, params.dim)
+            self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
         
         self.dropout = nn.Dropout(params.dropout)
         self.layers = torch.nn.ModuleList()
@@ -84,7 +84,6 @@ class Jerry(nn.Module):
             self.layers.append(JerryTransformerBlock(layer_idx, params))
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
 
-        self.sampler = Sampler()
         self.attention_mask= None
 
         if not self.flash_attention:
@@ -97,14 +96,6 @@ class Jerry(nn.Module):
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
     
-        self.cache_type = params.cache_type
-        if self.cache_type == 'recent':
-            self.kv_cache = StartRecentKVCache(
-                start_size=params.cache_start_size,
-                recent_size=params.cache_recent_size,
-                k_seq_dim=2,  # k_seq数据在第几维
-                v_seq_dim=2,
-            )
 
     
     def _init_weights(self, module):
@@ -123,7 +114,6 @@ class Jerry(nn.Module):
         return h + torch.zeros_like(h).uniform_(-mag_norm, mag_norm)
 
     def forward(self, input_ids: torch.Tensor, 
-                targets: Optional[torch.Tensor] = None,
                 past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None,
                 use_kv_cache: Optional[bool]=False,
                 ):
@@ -166,52 +156,8 @@ class Jerry(nn.Module):
                 
         hidden_states = self.norm(hidden_states)
 
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.output(hidden_states)
-            last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            ppl_loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1), reduction='sum')
-
-            return LLMModelOutput(loss=last_loss, 
-                                  ppl_loss=ppl_loss, 
-                                  logits=logits, 
-                                  hidden_states=hidden_states, 
+        return BaseLLMModelOutput(hidden_states=hidden_states, 
                                   past_key_values=new_past_key_values)
-        else:
-            # inference-time mini-optimization: only forward the output on the very last position
-            logits = self.output(hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
-
-            return LLMModelOutput(logits=logits, 
-                                  hidden_states=hidden_states, 
-                                  past_key_values=new_past_key_values)
-
-
-    def print_params(self):
-        param_dict = {pn: p for pn, p in self.tok_embeddings.named_parameters()}
-        decay_params1 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
-        num_decay_params1 = sum(p.numel() for p in decay_params1)
-
-        param_dict = {pn: p for pn, p in self.layers[0].named_parameters()}
-        decay_params2 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
-        num_decay_params2 = sum(p.numel() for p in decay_params2)
-
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2 or p.requires_grad==False]
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-
-        params_to_update = filter(lambda p: p.requires_grad, self.parameters())
-        num_params_to_update = sum(p.numel() for p in params_to_update)
-
-        tensor_n1, tensor_n2 = len(decay_params1), len(decay_params2)
-
-        print(f"=================models=================\n",self)
-        print(f"=================models:para=================\n",self.params)
-        print(f"[tok_embeddings]: num decayed parameter tensors: {tensor_n1}, with {num_decay_params1} parameters")
-        print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(self.layers)}, with {num_decay_params2}*{len(self.layers)} parameters")
-        print(f"num decayed parameter tensors: {num_decay_params1+num_decay_params2*len(self.layers)} parameters")
-        print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
-        print(f"\nnum need-updated parameter tensors {num_params_to_update} parameters")
-
 
 
     def estimate_mfu(self, fwdbwd_per_iter, dt):
@@ -229,54 +175,6 @@ class Jerry(nn.Module):
         flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
-
-
-    #@torch.inference_mode()
-    @torch.no_grad()
-    def generate(self, input_ids, eos=2, 
-                 max_new_tokens : Optional[int] = 1024, 
-                 temperature : Optional[float] = 1.0, 
-                 top_k : Optional[int] = 10,
-                 top_p : Optional[float] = 0.4,
-                 use_kv_cache : Optional[bool] = True,
-                 past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        Also note this is a super inefficient version of sampling with no key/value cache.
-        """
-        
-        if self.cache_type == 'recent' and use_kv_cache and past_key_values is not None:
-            space_needed = input_ids.shape[1] + max_new_tokens
-            past_key_values = self.kv_cache.evict_for_space(past_key_values, space_needed) # 只取需要的缓存
-
-        # 预填充
-        outputs = self(input_ids=input_ids,
-                       use_kv_cache=use_kv_cache,
-                       past_key_values=past_key_values,
-                       )
-        past_key_values = outputs.past_key_values
-        pred_token_idx = outputs.logits[:, -1, :].argmax(dim=-1).unsqueeze(1)
-        generated_ids = [pred_token_idx.item()]
-
-        # iter
-        for _ in range(max_new_tokens - 1):
-            # forward the model to get the logits for the index in the sequence
-            outputs = self(input_ids=pred_token_idx,
-                           past_key_values=past_key_values,
-                           )
-            past_key_values = outputs.past_key_values
-            pred_token_idx=self.sampler(outputs.logits[:, -1, :], 
-                                        temperature=temperature, 
-                                        top_k=top_k, 
-                                        top_p=top_p)
-            generated_ids.append(pred_token_idx.item())
-                
-            if pred_token_idx==eos:
-                break
-
-        return generated_ids
     
 
     def export(self, filepath='model.bin'):
@@ -330,3 +228,142 @@ class Jerry(nn.Module):
         # write to binary file
         f.close()
         print(f"wrote {filepath}")
+
+
+class JerryForCausalLM(nn.Module):
+    def __init__(self, params: ModelArgs):
+        super().__init__()
+        params.vocab_size = ((params.vocab_size + 63) // 64) * 64
+
+        self.model = Jerry(params)
+        self.output = nn.Linear(params.dim, params.vocab_size, bias=params.use_bias)
+        self.sampler = Sampler()
+
+        # share the unembedding parameters with the embedding parameters
+        self.model.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
+
+        self.cache_type = params.cache_type
+        self.kv_cache = None
+        if self.cache_type == 'recent':
+            self.kv_cache = StartRecentKVCache(
+                start_size=params.cache_start_size,
+                recent_size=params.cache_recent_size,
+                k_seq_dim=2,  # k_seq数据在第几维
+                v_seq_dim=2,
+            )
+        
+        if params.load_in_4bit:
+            layers = find_layers(self)
+            for name in ['output']:
+                if name in layers:
+                    del layers[name]
+            make_quant(self, layers, faster=True)
+
+
+    def forward(self, input_ids: torch.Tensor, 
+                targets: Optional[torch.Tensor] = None,
+                past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None,
+                use_kv_cache: Optional[bool]=False,
+                ):
+        
+        outputs = self.model(
+            input_ids=input_ids,
+            past_key_values=past_key_values,
+            use_kv_cache=use_kv_cache,
+        )
+
+        if targets is not None:
+            # if we are given some desired targets also calculate the loss
+            logits = self.output(outputs.hidden_states)
+            last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            ppl_loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), targets.view(-1), reduction='sum')
+
+            return CasualLLMModelOutput(loss=last_loss, 
+                                        ppl_loss=ppl_loss, 
+                                        logits=logits, 
+                                        hidden_states=outputs.hidden_states, 
+                                        past_key_values=outputs.past_key_values)
+        else:
+            # inference-time mini-optimization: only forward the output on the very last position
+            logits = self.output(outputs.hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
+
+            return CasualLLMModelOutput(logits=logits, 
+                                        hidden_states=outputs.hidden_states, 
+                                        past_key_values=outputs.past_key_values)
+    
+    #@torch.inference_mode()
+    @torch.no_grad()
+    def generate(self, input_ids, eos=2, 
+                 max_new_tokens : Optional[int] = 1024, 
+                 temperature : Optional[float] = 1.0, 
+                 top_k : Optional[int] = 10,
+                 top_p : Optional[float] = 0.4,
+                 use_kv_cache : Optional[bool] = True,
+                 past_key_values: Optional[List[Tuple[torch.FloatTensor]]]=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        Also note this is a super inefficient version of sampling with no key/value cache.
+        """
+        
+        if self.cache_type == 'recent' and use_kv_cache and past_key_values is not None:
+            space_needed = input_ids.shape[1] + max_new_tokens
+            past_key_values = self.kv_cache.evict_for_space(past_key_values, space_needed) # 只取需要的缓存
+
+        # 预填充
+        outputs = self.model(input_ids=input_ids,
+                            use_kv_cache=use_kv_cache,
+                            past_key_values=past_key_values,
+                            )
+        logits = self.output(outputs.hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
+        past_key_values = outputs.past_key_values
+        pred_token_idx = logits.argmax(dim=-1).unsqueeze(1)
+        generated_ids = [pred_token_idx.item()]
+
+        # iter
+        for _ in range(max_new_tokens - 1):
+            # forward the model to get the logits for the index in the sequence
+            outputs = self.model(input_ids=pred_token_idx,
+                                 past_key_values=past_key_values,
+                                 )
+            past_key_values = outputs.past_key_values
+            logits = self.output(outputs.hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            pred_token_idx=self.sampler(logits, 
+                                        temperature=temperature, 
+                                        top_k=top_k, 
+                                        top_p=top_p)
+            generated_ids.append(pred_token_idx.item())
+                
+            if pred_token_idx==eos:
+                break
+
+        return generated_ids
+    
+    def print_params(self):
+        param_dict = {pn: p for pn, p in self.model.tok_embeddings.named_parameters()}
+        decay_params1 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
+        num_decay_params1 = sum(p.numel() for p in decay_params1)
+
+        param_dict = {pn: p for pn, p in self.model.layers[0].named_parameters()}
+        decay_params2 = [p for n, p in param_dict.items() if p.dim() >= 2 and p.requires_grad]
+        num_decay_params2 = sum(p.numel() for p in decay_params2)
+
+        param_dict = {pn: p for pn, p in self.model.named_parameters()}
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2 or p.requires_grad==False]
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+
+        params_to_update = filter(lambda p: p.requires_grad, self.parameters())
+        num_params_to_update = sum(p.numel() for p in params_to_update)
+
+        tensor_n1, tensor_n2 = len(decay_params1), len(decay_params2)
+
+        print(f"=================models=================\n",self)
+        print(f"=================models:para=================\n",self.model.params)
+        print(f"[tok_embeddings]: num decayed parameter tensors: {tensor_n1}, with {num_decay_params1} parameters")
+        print(f"[layers]: num decayed parameter tensors: {tensor_n2}*{len(self.model.layers)}, \
+              with {num_decay_params2}*{len(self.model.layers)} parameters")
+        print(f"num decayed parameter tensors: \
+              {num_decay_params1+num_decay_params2*len(self.model.layers)} parameters")
+        print(f"num non-decayed parameter tensors {num_nodecay_params} parameters")
+        print(f"\nnum need-updated parameter tensors {num_params_to_update} parameters")

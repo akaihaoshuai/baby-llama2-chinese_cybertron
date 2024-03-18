@@ -38,6 +38,7 @@ model_params:
   norm_eps: 0.00001
   use_bias: False
   flash_attention: False
+  load_in_4bit: False
   dtype: 'float16'
   vocab_size: 64793
   vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'

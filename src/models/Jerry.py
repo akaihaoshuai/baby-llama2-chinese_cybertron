@@ -14,7 +14,6 @@ from src.models.model_args import *
 from src.layers.sampler import Sampler
 from src.layers.short_recent_kv_cache import StartRecentKVCache
 from src.utils import find_layers
-from src.gptq.quant import make_quant
 
 class JerryTransformerBlock(nn.Module):
     def __init__(self, layer_idx: int, params):
@@ -252,12 +251,13 @@ class JerryForCausalLM(nn.Module):
                 v_seq_dim=2,
             )
         
-        if params.load_in_4bit:
+        if -1 != params.load_in_lowbit:
+            from src.gptq.quant.quant_linear import make_quant_linear
             layers = find_layers(self)
             for name in ['output']:
                 if name in layers:
                     del layers[name]
-            make_quant(self, layers, faster=True)
+            make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
 
 
     def forward(self, input_ids: torch.Tensor, 

@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 @dataclass
 class ModelArgs:
-    dim: int = 4096
+    dim: int = 2048
     n_layers: int = 32
     n_heads: int = 32
     n_kv_heads: Optional[int] = None
@@ -29,7 +29,8 @@ class ModelArgs:
     rope_scaling_factor: float = 1.0
 
     is_train: bool = False
-    load_in_4bit: bool = False
+    load_in_lowbit: int = -1
+    load_in_lowbit_groupsize: int = -1
     
     # finutune
     ft_type : str = 'full_ft'    # full_ft/lora/qlora/dora
@@ -72,7 +73,8 @@ def get_model_args(opt, train_flag):
         neftune_noise_alpha=opt.neftune_noise_alpha,
         dtype=opt.dtype,
         is_train=train_flag,
-        load_in_4bit=opt.load_in_4bit,
+        load_in_lowbit=opt.load_in_lowbit,
+        load_in_lowbit_groupsize=opt.load_in_lowbit_groupsize,
 
         cache_type = opt.cache_type,
         cache_start_size = opt.cache_start_size,

@@ -4,22 +4,16 @@ import torch
 import torch.nn as nn
 
 from src.gptq.gptq import *
-from src.gptq.quant import *
 from src.share import init_model
 from src.utils import find_layers
-
-
-def get_opt(model):
-    import torch
-    def skip(*args, **kwargs):
-        pass
-    torch.nn.init.kaiming_uniform_ = skip
-    torch.nn.init.uniform_ = skip
-    torch.nn.init.normal_ = skip
-    from transformers import OPTForCausalLM
-    model = OPTForCausalLM.from_pretrained(model, torch_dtype='auto')
-    model.seqlen = model.config.max_position_embeddings
-    return model
+from src.gptq.quant.quantizer import Quantizer
+from src.gptq.quant.quant_linear import QuantLinear
+from src.gptq.gptq import Observer
+from src.gptq.quant import make_quant_attn
+from src.gptq.quant import make_quant_norm
+from src.gptq.quant import make_fused_mlp
+from src.gptq.quant import autotune_warmup_linear
+from src.gptq.quant import autotune_warmup_fused
 
 @torch.no_grad()
 def quant_sequential(model, dataloader, dev):
@@ -27,13 +21,14 @@ def quant_sequential(model, dataloader, dev):
     layers = model.model.layers
 
     model.model.tok_embeddings = model.model.tok_embeddings.to(dev) 
+    model.model.norm = model.model.norm.to(dev)
     layers[0] = layers[0].to(dev)
 
     dtype = next(iter(model.model.parameters())).dtype
     inps = torch.zeros(  # [128, 2048, 768]
         (args.nsamples, model.model.max_seq_len, model.model.dim), dtype=dtype, device=dev
     )
-    cache = {'i': 0, 'attention_mask': None, 'position_ids': None}
+    cache = {'i': 0, 'position_ids': None, 'attention_mask': None}
 
     class Catcher(nn.Module):
         def __init__(self, module):
@@ -42,9 +37,10 @@ def quant_sequential(model, dataloader, dev):
         def forward(self, inp, **kwargs):
             inps[cache['i']] = inp  # hidden_status
             cache['i'] += 1
+            cache['position_ids'] = kwargs['position_ids'] # 
             cache['attention_mask'] = kwargs['attention_mask'] # mask
-            cache['position_ids'] = kwargs['position_ids'] # mask
             raise ValueError
+        
     layers[0] = Catcher(layers[0])
     for batch in dataloader:  # 循环处理，把inps和cache填满
         try:
@@ -55,23 +51,29 @@ def quant_sequential(model, dataloader, dev):
 
     layers[0] = layers[0].cpu()
     model.model.tok_embeddings = model.model.tok_embeddings.cpu()
+    model.model.norm = model.model.norm.cpu()
     torch.cuda.empty_cache()
 
     outs = torch.zeros_like(inps)
-    attention_mask = cache['attention_mask']
     position_ids = cache['position_ids']
+    attention_mask = cache['attention_mask']
 
     print('Ready.')
 
     quantizers = {}
+    observer = Observer()
     for i in range(len(layers)):  # 遍历每一个transformer layer
+        print(f'Quantizing layer {i+1}/{len(layers)}..')
+        print('+------------------+--------------+------------+-----------+-------+')
+        print('|       name       | weight_error | fp_inp_SNR | q_inp_SNR | time  |')
+        print('+==================+==============+============+===========+=======+')
+
         layer = layers[i].to(dev)
 
         subset = find_layers(layer)  # 找到所有子层(Linear层或Conv层)
         gptq = {}
         for name in subset:
             gptq[name] = GPTQ(subset[name])  # 每一个子层创建量化类
-            gptq[name].quantizer = Quantizer()
             gptq[name].quantizer.configure(
                 args.wbits, perchannel=True, sym=args.sym, mse=False, trits=args.trits
             )
@@ -80,6 +82,7 @@ def quant_sequential(model, dataloader, dev):
             def tmp(_, inp, out):
                 gptq[name].add_batch(inp[0].data, out.data)
             return tmp
+        
         handles = []
         for name in subset:
             handles.append(subset[name].register_forward_hook(add_batch(name))) # 获取每一个子层的输入输出
@@ -89,13 +92,14 @@ def quant_sequential(model, dataloader, dev):
             h.remove()
 
         for name in subset: # 对每一个子层进行量化
-            print(i, name)
-            print('Quantizing ...')
-            gptq[name].fasterquant(
-                percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order, static_groups=args.static_groups
-            )
-            quantizers['model.layers.%d.%s' % (i, name)] = gptq[name].quantizer
-            gptq[name].free()
+            scale, zero, g_idx, error = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order, name=name)
+            quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer.cpu(), scale.cpu(), zero.cpu(), g_idx.cpu(), args.wbits, args.groupsize)
+
+            if args.observe:
+                observer.submit(name=name, layerid=i, gptq=gptq[name], error=error)
+            else:
+                gptq[name].free()
+
         for j in range(args.nsamples):  # 处理获取N组输出
             outs[j] = layer(inps[j].unsqueeze(0), position_ids, attention_mask=attention_mask)[0]
 
@@ -105,6 +109,42 @@ def quant_sequential(model, dataloader, dev):
         torch.cuda.empty_cache()
 
         inps, outs = outs, inps  # 输入和输出反过来，下一个transformer继续用
+        print('+------------------+--------------+------------+-----------+-------+')
+        print('\n')
+
+    if args.observe:
+        observer.print()
+        conditions = gen_conditions(args.wbits, args.groupsize)
+        for item in observer.items():
+            name = item[0]
+            layerid = item[1]
+            gptq = item[2]['gptq']
+            error = item[2]['error']
+            target = error / 2
+
+            table = Texttable()
+            table.header(['wbits', 'groupsize', 'error'])
+            table.set_cols_dtype(['i', 'i', 'f'])
+            table.add_row([args.wbits, args.groupsize, error])
+
+            print('Optimizing {} {} ..'.format(name, layerid))
+            for wbits, groupsize in conditions:
+
+                if error < target:
+                    # if error dropped 50%, skip
+                    break
+
+                gptq.quantizer.configure(wbits, perchannel=True, sym=args.sym, mse=False)
+
+                scale, zero, g_idx, error = gptq.fasterquant(percdamp=args.percdamp, groupsize=groupsize, actorder=args.act_order, name=name)
+
+                table.add_row([wbits, groupsize, error])
+                quantizers['model.layers.%d.%s' % (layerid, name)] = (gptq.quantizer.cpu(), scale.cpu(), zero.cpu(), g_idx.cpu(), wbits, groupsize)
+
+            print(table.draw())
+            print('\n')
+            gptq.layer.to('cpu')
+            gptq.free()
 
     return quantizers
 
@@ -113,18 +153,17 @@ def model_eval(model, testenc, dev):
     print('Evaluating ...')
 
     testenc = testenc.input_ids
-    nsamples = testenc.numel() // model.seqlen
+    nsamples = testenc.numel() // model.model.max_seq_len
 
-    layers = model.model.decoder.layers
-
+    layers = model.model.layers
     model.model.tok_embeddings = model.model.tok_embeddings.to(dev)
     layers[0] = layers[0].to(dev)
 
     dtype = next(iter(model.parameters())).dtype
     inps = torch.zeros(
-        (nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
+        (nsamples, model.model.max_seq_len, model.model.dim), dtype=dtype, device=dev
     )
-    cache = {'i': 0, 'attention_mask': None}
+    cache = {'i': 0, 'position_ids': None, 'attention_mask': None}
 
     class Catcher(nn.Module):
         def __init__(self, module):
@@ -133,11 +172,12 @@ def model_eval(model, testenc, dev):
         def forward(self, inp, **kwargs):
             inps[cache['i']] = inp
             cache['i'] += 1
+            cache['position_ids'] = kwargs['position_ids']
             cache['attention_mask'] = kwargs['attention_mask']
             raise ValueError
     layers[0] = Catcher(layers[0])
     for i in range(nsamples):
-        batch = testenc[:, (i * model.seqlen):((i + 1) * model.seqlen)].to(dev)
+        batch = testenc[:, (i * model.model.max_seq_len):((i + 1) * model.model.max_seq_len)].to(dev)
         try:
             model(batch)
         except ValueError:
@@ -145,10 +185,11 @@ def model_eval(model, testenc, dev):
     layers[0] = layers[0].module
 
     layers[0] = layers[0].cpu()
-    model.model.decoder.tok_embeddings = model.model.decoder.tok_embeddings.cpu()
+    model.model.tok_embeddings = model.model.tok_embeddings.cpu()
     torch.cuda.empty_cache()
 
     outs = torch.zeros_like(inps)
+    position_ids = cache['position_ids']
     attention_mask = cache['attention_mask']
 
     for i in range(len(layers)):
@@ -169,7 +210,7 @@ def model_eval(model, testenc, dev):
                 ).to(next(iter(layer.parameters())).dtype)
 
         for j in range(nsamples):
-            outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask)[0]
+            outs[j] = layer(inps[j].unsqueeze(0), position_ids, attention_mask=attention_mask)[0]
         layers[i] = layer.cpu()
         del layer
         torch.cuda.empty_cache()
@@ -184,32 +225,32 @@ def model_eval(model, testenc, dev):
         lm_logits = model.output(hidden_states)
         shift_logits = lm_logits[:, :-1, :].contiguous()
         shift_labels = testenc[
-            :, (i * model.seqlen):((i + 1) * model.seqlen)
+            :, (i * model.model.max_seq_len):((i + 1) * model.model.max_seq_len)
         ][:, 1:]
         loss_fct = nn.CrossEntropyLoss()
         loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        neg_log_likelihood = loss.float() * model.seqlen
+        neg_log_likelihood = loss.float() * model.model.max_seq_len
         nlls.append(neg_log_likelihood)
-    ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * model.seqlen))
+    ppl = torch.exp(torch.stack(nlls).sum() / (nsamples * model.model.max_seq_len))
     print(ppl.item())
 
 
 # TODO: perform packing on GPU
-def model_pack(model, quantizers):
+def model_pack(model, quantizers, wbits, groupsize):
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    make_quant(model, quantizers, faster=args.faster_kernel)
-    qlayers = find_layers(model, [Quant3Linear])
+    make_quant_linear(model, quantizers, wbits, groupsize)
+    qlayers = find_layers(model, [QuantLinear])
     print('Packing ...')
     for name in qlayers:
         print(name)
-        quantizers[name] = quantizers[name].cpu()
-        qlayers[name].pack(layers[name], quantizers[name].scale, quantizers[name].zero)
+        quantizers[name], scale, zero, g_idx, _, _ = quantizers[name]
+        qlayers[name].pack(layers[name], scale, zero, g_idx)
 
     print('Done.')
     return model
 
-def load_quant_model(model, checkpoint, opt):
+def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=True, warmup_autotune=True):
     def noop(*args, **kwargs):
         pass
     torch.nn.init.kaiming_uniform_ = noop
@@ -224,10 +265,26 @@ def load_quant_model(model, checkpoint, opt):
     for name in ['output']:
         if name in layers:
             del layers[name]
-    make_quant(model, layers, faster=args.faster_kernel)
+    make_quant_linear(model, layers, wbits, groupsize)
 
     print('Loading model ...')
-    model.load_state_dict(torch.load(checkpoint))
+    if checkpoint.endswith('.safetensors'):
+        from safetensors.torch import load_file as safe_load
+        model.load_state_dict(safe_load(checkpoint))
+    else:
+        model.load_state_dict(torch.load(checkpoint))
+
+    if eval:
+        make_quant_attn(model)
+        make_quant_norm(model)
+        if fused_mlp:
+            make_fused_mlp(model)
+
+    if warmup_autotune:
+        autotune_warmup_linear(model, transpose=not (eval))
+        if eval and fused_mlp:
+            autotune_warmup_fused(model)
+
     print('Done.')
 
     return model
@@ -243,7 +300,7 @@ def benchmark(model, input_ids, device, check=False):
             if cache['past']:
                 cache['past'][i] = None
         return tmp
-    for i, layer in enumerate(model.model.decoder.layers):
+    for i, layer in enumerate(model.model.layers):
         layer.register_forward_hook(clear_past(i))
 
     print('Benchmarking ...')
@@ -288,74 +345,31 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        'model', type=str,
-        help='OPT model to load; pass `facebook/opt-X`.'
-    )
-    parser.add_argument(
-        'dataset', type=str, choices=['wikitext2', 'ptb', 'c4'],
-        help='Where to extract calibration data from.'
-    )
-    parser.add_argument(
-        '--nsamples', type=int, default=128,
-        help='Number of calibration data samples.'
-    )
-    parser.add_argument(
-        '--percdamp', type=float, default=.01,
-        help='Percent of the average Hessian diagonal to use for dampening.'
-    )
-    parser.add_argument(
-        '--nearest', action='store_true',
-        help='Whether to run the RTN baseline.'
-    ) 
-    parser.add_argument(
-        '--wbits', type=int, default=16, choices=[2, 3, 4, 16],
-        help='#bits to use for quantization; use 16 for evaluating base model.'
-    )
-    parser.add_argument(
-        '--trits', action='store_true',
-        help='Whether to use trits for quantization.'
-    )
-    parser.add_argument(
-        '--groupsize', type=int, default=-1,
-        help='Groupsize to use for quantization; default uses full row.'
-    )
-    parser.add_argument(
-        '--sym', action='store_true',
-        help='Whether to perform symmetric quantization.'
-    )
-    parser.add_argument(
-        '--save', type=str, default='quant.ckpt',
-        help='Save quantized checkpoint under this name.'
-    )
-    parser.add_argument(
-        '--load', type=str, default='',
-        help='Load quantized model.'
-    )
-    parser.add_argument(
-        '--benchmark', type=int, default=0,
-        help='Number of tokens to use for benchmarking.'
-    )
-    parser.add_argument(
-        '--check', action='store_true',
-        help='Whether to compute perplexity during benchmarking for verification.'
-    )
-    parser.add_argument(
-        '--new-eval', action='store_true',
-        help='Whether to use the new PTB and C4 eval.'
-    )
-    parser.add_argument(
-        '--faster-kernel', action='store_true',
-        help='Whether to use the new faster kernel for benchmarking.'
-    )
-    parser.add_argument(
-        '--act-order', action='store_true',
-        help='Whether to apply the activation order GPTQ heuristic'
-    )
-    parser.add_argument(
-        '--static-groups', action='store_true',
-        help='Whether to use static groups; recommended when using `--actorder` for more efficient inference.'
-    )
+    parser.add_argument('model', type=str, help='llama model to load')
+    parser.add_argument('dataset', type=str, choices=['wikitext2', 'ptb', 'c4'], help='Where to extract calibration data from.')
+    parser.add_argument('--nsamples', type=int, default=128, help='Number of calibration data samples.')
+    parser.add_argument('--percdamp', type=float, default=.01, help='Percent of the average Hessian diagonal to use for dampening.')
+    parser.add_argument('--nearest', action='store_true', help='Whether to run the RTN baseline.')
+    parser.add_argument('--wbits', type=int, default=16, choices=[2, 3, 4, 8, 16], help='#bits to use for quantization; use 16 for evaluating base model.')
+    parser.add_argument('--trits', action='store_true', help='Whether to use trits for quantization.')
+    parser.add_argument('--groupsize', type=int, default=-1, help='Groupsize to use for quantization; default uses full row.')
+    parser.add_argument('--eval', action='store_true', help='evaluate quantized model.')
+    parser.add_argument('--test-generation', action='store_true', help='test generation.')
+    parser.add_argument('--save', type=str, default='', help='Save quantized checkpoint under this name.')
+    parser.add_argument('--save_safetensors', type=str, default='', help='Save quantized `.safetensors` checkpoint under this name.')
+    parser.add_argument('--load', type=str, default='', help='Load quantized model.')
+    parser.add_argument('--benchmark', type=int, default=0, help='Number of tokens to use for benchmarking.')
+    parser.add_argument('--check', action='store_true', help='Whether to compute perplexity during benchmarking for verification.')
+    parser.add_argument('--sym', action='store_true', help='Whether to perform symmetric quantization.')
+    parser.add_argument('--act-order', action='store_true', help='Whether to apply the activation order GPTQ heuristic')
+    parser.add_argument('--true-sequential', action='store_true', help='Whether to run in true sequential model.')
+    parser.add_argument('--new-eval', action='store_true', help='Whether to use the new PTB and C4 eval')
+    parser.add_argument('--layers-dist', type=str, default='', help='Distribution of layers across GPUs. e.g. 2:1:1 for 2 layers on GPU 0, 1 layer on GPU 1, and 1 layer on GPU 2. Any remaining layers will be assigned to your last GPU.')
+    parser.add_argument('--observe',action='store_true',
+                        help='Auto upgrade layer precision to higher precision, for example int2 to int4, groupsize 128 to 64. \
+                              When this feature enabled, `--save` or `--save_safetensors` would be disable.')
+    parser.add_argument('--quant-directory', type=str, default=None, help='Specify the directory for export quantization parameters to toml format. `None` means no export by default.')
+
 
     args = parser.parse_args()
     from setting import get_parser_args, parser_model_config
@@ -363,8 +377,10 @@ if __name__ == '__main__':
     opt, _ = parser_model_config(opt)
     
     if args.load:
-        model = load_quant_model(args.model, args.load, opt)
+        model = load_quant_model(args.load, args.wbits, args.groupsize, opt)
     else:
+        opt.model_path = opt.model
+        opt.init_from = "resume"
         model = init_model(opt)
         model.eval()
 
@@ -373,7 +389,7 @@ if __name__ == '__main__':
         args.dataset, nsamples=args.nsamples, model=args.model, seqlen=model.model.max_seq_len
     )
 
-    if args.wbits < 16 and not args.nearest:
+    if not args.load and args.wbits < 16 and not args.nearest:
         tick = time.time()
         quantizers = quant_sequential(model, dataloader, opt.device)
         print(time.time() - tick)
@@ -383,19 +399,25 @@ if __name__ == '__main__':
         if args.benchmark:
             input_ids = next(iter(dataloader))[0][:, :args.benchmark]
             benchmark(model, input_ids, device=opt.device, check=args.check)
-    if args.load:
-        exit()
 
-    datasets = ['wikitext2', 'ptb', 'c4']
-    if args.new_eval:
-      datasets = ['wikitext2', 'ptb-new', 'c4-new']
-    for dataset in datasets: 
-        dataloader, testloader = get_loaders(
-            dataset, seed=0, model=args.model, seqlen=model.model.max_seq_len
-        )
-        print(dataset)
-        model_eval(model, testloader, opt.device)
+    if args.eval:
+        datasets = ['wikitext2', 'ptb', 'c4']
+        # datasets = ['wikitext2', 'ptb-new', 'c4-new']
+        for dataset in datasets: 
+            print(f'model_eval: {dataset}')
+            dataloader, testloader = get_loaders(
+                dataset, seed=0, model=args.model, seqlen=model.model.max_seq_len
+            )
+            print(dataset)
+            model_eval(model, testloader, opt.device)
 
     if args.save:
-        model_pack(model, quantizers)
+        model_pack(model, quantizers, args.wbits, args.groupsize)
         torch.save(model.state_dict(), args.save) 
+
+    if args.save_safetensors:
+        model_pack(model, quantizers, args.wbits, args.groupsize)
+        from safetensors.torch import save_file as safe_save
+        state_dict = model.state_dict()
+        state_dict = {k: v.clone().contiguous() for k, v in state_dict.items()}
+        safe_save(state_dict, args.save_safetensors)

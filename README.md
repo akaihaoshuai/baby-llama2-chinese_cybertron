@@ -3,29 +3,33 @@
 
 本项目是便于自己学习LLM相关知识所建，实现了一些功能，但没有详细的测试，代码中难免存在一些bug。
 
+  
 
-## 。。。训练代码目前有bug，由于精力有限，暂时还未修复。。。😭
+<br />
+
+## 😭训练代码目前有bug，由于精力有限，暂时还未修复。。。   
+
+<br />
 
 
-## 更新记录
+## 更新记录  
+>2024.03.20：支持GPTQ量化，可以运行。增加llm.int8/awq/onebit量化代码，但代码未测试，[https://zhuanlan.zhihu.com/p/686161543]
 
->2024.03.20：支持GPTQ量化，可以运行。增加llm.int8/awq/onebit量化代码，但代码未测试，[https://zhuanlan.zhihu.com/p/684907262]
-
->2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。https://zhuanlan.zhihu.com/p/684907262
+>2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。[https://zhuanlan.zhihu.com/p/684907262]
 
 >2024.03.02：支持LoRA训练，根据LongLoRA优化代码，支持SS-Attn
 
->2024.02.29：支持长度外推，from LLaMA。 https://zhuanlan.zhihu.com/p/683731440
+>2024.02.29：支持长度外推，from LLaMA。 [https://zhuanlan.zhihu.com/p/683731440]
 
->2024.02.24：支持deepspeed训练。https://zhuanlan.zhihu.com/p/683768690
+>2024.02.24：支持deepspeed训练。[https://zhuanlan.zhihu.com/p/683768690]
 
->2023.11.02：增加训练tokenizer代码，扩展数据。https://zhuanlan.zhihu.com/p/664046612
+>2023.11.02：增加训练tokenizer代码，扩展数据。[https://zhuanlan.zhihu.com/p/664046612]
 
 >2023.10.21：测试falsh attention
 
->2023.10.13：fork代码，训练实战。https://zhuanlan.zhihu.com/p/660759033
+>2023.10.13：fork代码，训练实战。[https://zhuanlan.zhihu.com/p/660759033]
 
-
+<br />
 
 
 
@@ -39,7 +43,6 @@
 除此之外，为了让模型具备在某一个专有领域的能力，这里选用了“医疗问答”作为切入点，尝试收集了很多的医疗数据和上面的通用语料一起喂给模型。
 
 tips：训练数据在训练的过程中有所扩展，详情可参考知乎文章。
-
 
 ## 中文分词器
 
@@ -71,7 +74,9 @@ python train_tokenizer.py
 - prompt和answer之间一定要有一个开始符隔开，然后answer后需要一个结束符。
 - 计算loss的时候，对prompt部分的loss进行mask，只计算answer部分的loss即可。
 
-## 预训练+SFT
+<br />
+
+## 预训练+SFT脚本
 参考run.sh
 
 ```python
@@ -109,6 +114,9 @@ else  # deepspeed
         CUDA_VISIBLE_DEVICES=1 python eval.py
     fi
 fi
+
+# 量化模型
+# CUDA_VISIBLE_DEVICES=0 python quant_model.py --model ./out/pretrain.ckpt --dataset wikitext2 --wbits 4
 
 ```
 

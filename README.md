@@ -4,7 +4,13 @@
 本项目是便于自己学习LLM相关知识所建，实现了一些功能，但没有详细的测试，代码中难免存在一些bug。
 
 
+#。。。训练代码目前有bug，由于精力有限，暂时还未修复。。。😭
+
+
 ## 更新记录
+
+>2024.03.20：支持GPTQ量化，可以运行。增加llm.int8/awq/onebit量化代码，但代码未测试，[https://zhuanlan.zhihu.com/p/684907262]
+
 >2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。https://zhuanlan.zhihu.com/p/684907262
 
 >2024.03.02：支持LoRA训练，根据LongLoRA优化代码，支持SS-Attn

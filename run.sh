@@ -35,4 +35,4 @@ fi
 
 
 # 量化模型
-# CUDA_VISIBLE_DEVICES=0 python quant_model.py ./out/pretrain.ckpt wikitext2 --wbits 4
+# CUDA_VISIBLE_DEVICES=0 python quant_model.py --model ./out/pretrain.ckpt --dataset wikitext2 --wbits 4

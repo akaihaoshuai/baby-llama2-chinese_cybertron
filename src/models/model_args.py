@@ -31,6 +31,7 @@ class ModelArgs:
     is_train: bool = False
     load_in_lowbit: int = -1
     load_in_lowbit_groupsize: int = -1
+    load_in_quant_type: str ='gptq'  # gptq/llm_int8/awq/onebit 暂时只支持gptq
     
     # finutune
     ft_type : str = 'full_ft'    # full_ft/lora/qlora/dora
@@ -75,6 +76,7 @@ def get_model_args(opt, train_flag):
         is_train=train_flag,
         load_in_lowbit=opt.load_in_lowbit,
         load_in_lowbit_groupsize=opt.load_in_lowbit_groupsize,
+        load_in_quant_type=opt.load_in_quant_type,
 
         cache_type = opt.cache_type,
         cache_start_size = opt.cache_start_size,

@@ -252,12 +252,36 @@ class JerryForCausalLM(nn.Module):
             )
         
         if -1 != params.load_in_lowbit:
-            from src.gptq.quant.quant_linear import make_quant_linear
-            layers = find_layers(self)
-            for name in ['output']:
-                if name in layers:
-                    del layers[name]
-            make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
+            if 'gptq' == params.load_in_quant_type:
+                from src.quant.share import gptq_make_quant_linear
+                layers = find_layers(self)
+                for name in ['output']:
+                    if name in layers:
+                        del layers[name]
+                gptq_make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
+            elif 'llm_int8' == params.load_in_quant_type:
+                from transformers.utils import is_bitsandbytes_available
+                if is_bitsandbytes_available():
+                    layers = find_layers(self)
+                    for name in ['output']:
+                        if name in layers:
+                            del layers[name]
+                    from src.quant.share import bnb_make_quant_linear
+                    bnb_make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
+            elif 'awq' == params.load_in_quant_type:
+                layers = find_layers(self)
+                for name in ['output']:
+                    if name in layers:
+                        del layers[name]
+                from src.quant.share import awq_make_quant_linear
+                awq_make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
+            elif 'bitnet' == params.load_in_quant_type:
+                layers = find_layers(self)
+                for name in ['output']:
+                    if name in layers:
+                        del layers[name]
+                from src.quant.share import bitnet_make_quant_linear
+                bitnet_make_quant_linear(self, layers, params.load_in_lowbit, params.load_in_lowbit_groupsize)
 
 
     def forward(self, input_ids: torch.Tensor, 
@@ -316,7 +340,7 @@ class JerryForCausalLM(nn.Module):
                             use_kv_cache=use_kv_cache,
                             past_key_values=past_key_values,
                             )
-        logits = self.output(outputs.hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
+        logits = self.output(outputs.hidden_states[:, -1, :]) # note: using list [-1] to preserve the time dim
         past_key_values = outputs.past_key_values
         pred_token_idx = logits.argmax(dim=-1).unsqueeze(1)
         generated_ids = [pred_token_idx.item()]
@@ -328,7 +352,7 @@ class JerryForCausalLM(nn.Module):
                                  past_key_values=past_key_values,
                                  )
             past_key_values = outputs.past_key_values
-            logits = self.output(outputs.hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = self.output(outputs.hidden_states[:, -1, :]) # note: using list [-1] to preserve the time dim
             pred_token_idx=self.sampler(logits, 
                                         temperature=temperature, 
                                         top_k=top_k, 

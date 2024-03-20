@@ -62,7 +62,7 @@ def find_layers(module, layers=[nn.Conv2d, nn.Linear], name=''):
 
 def load_weight(model, state_dict, lora_state_dict=None, merge_lora_on_load=False, strict=True):
     # 从预训练权重中更新模型参数
-    if model.params.ft_type == 'lora' or model.params.lora_path != '':
+    if model.model.params.ft_type == 'lora' or model.model.params.lora_path != '':
         model_dict = model.state_dict()
         for name, param in state_dict.items():
             if model_dict[name].shape == param.shape:

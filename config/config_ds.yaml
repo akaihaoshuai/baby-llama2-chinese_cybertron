@@ -39,6 +39,7 @@ model_params:
   flash_attention: False
   load_in_4bit: -1
   load_in_lowbit_groupsize: -1
+  load_in_quant_type: 'gptq'  # gptq/llm_int8/awq/onebit  暂只支持gptq
   dtype: 'float16'
   vocab_size: 64793
   vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'

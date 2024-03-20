@@ -35,6 +35,8 @@ def get_parser_args(parser=None):
     parser.add_argument("--flash_attention", type=bool, default=False)
     parser.add_argument("--load_in_lowbit", type=int, default=-1, choices=[-1, 2, 3, 4]) 
     parser.add_argument("--load_in_lowbit_groupsize", type=int, default=-1)
+    parser.add_argument('--load_in_quant_type', type=str, default="gptq", choices=['gptq', 'llm_int8', 'awq', 'onebit']) # 暂只支持gptq
+
     parser.add_argument("--dtype", type=str, default='float16', help="path to config")
     parser.add_argument("--vocab_size", type=int, default=64793)
     parser.add_argument("--vocab_file", type=str, default='./chatglm_tokenizer/tokenizer.model', help="path to config")
@@ -132,6 +134,7 @@ def parser_model_config(opt):
         opt.flash_attention = model_params_yaml.get('flash_attention', opt.flash_attention)
         opt.load_in_lowbit = model_params_yaml.get('load_in_lowbit', opt.load_in_lowbit)
         opt.load_in_lowbit_groupsize = model_params_yaml.get('load_in_lowbit_groupsize', opt.load_in_lowbit_groupsize)
+        opt.load_in_quant_type = model_params_yaml.get('load_in_quant_type', opt.load_in_quant_type)
         opt.dtype = model_params_yaml.get('dtype', opt.dtype)
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)

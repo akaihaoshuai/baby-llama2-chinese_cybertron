@@ -3,17 +3,18 @@ import time
 import torch
 import torch.nn as nn
 
-from src.gptq.gptq import *
+from src.quant.gptq import *
 from src.share import init_model
 from src.utils import find_layers
-from src.gptq.quant.quantizer import Quantizer
-from src.gptq.quant.quant_linear import QuantLinear
-from src.gptq.gptq import Observer
-from src.gptq.quant import make_quant_attn
-from src.gptq.quant import make_quant_norm
-from src.gptq.quant import make_fused_mlp
-from src.gptq.quant import autotune_warmup_linear
-from src.gptq.quant import autotune_warmup_fused
+from src.quant.quant.quantizer import Quantizer
+from src.quant.quant.quant_linear import QuantLinear
+from src.quant.gptq import Observer
+from src.quant.share import gptq_make_quant_linear
+from src.quant.quant import make_quant_attn
+from src.quant.quant import make_quant_norm
+from src.quant.quant import make_fused_mlp
+from src.quant.quant import autotune_warmup_linear
+from src.quant.quant import autotune_warmup_fused
 
 @torch.no_grad()
 def quant_sequential(model, dataloader, dev):
@@ -239,7 +240,7 @@ def model_eval(model, testenc, dev):
 def model_pack(model, quantizers, wbits, groupsize):
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    make_quant_linear(model, quantizers, wbits, groupsize)
+    gptq_make_quant_linear(model, quantizers, wbits, groupsize)
     qlayers = find_layers(model, [QuantLinear])
     print('Packing ...')
     for name in qlayers:
@@ -250,7 +251,7 @@ def model_pack(model, quantizers, wbits, groupsize):
     print('Done.')
     return model
 
-def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=True, warmup_autotune=True):
+def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=True, warmup_autotune=False):
     def noop(*args, **kwargs):
         pass
     torch.nn.init.kaiming_uniform_ = noop
@@ -258,6 +259,8 @@ def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=Tru
     torch.nn.init.normal_ = noop 
 
     torch.set_default_dtype(torch.half)
+    opt.load_in_lowbit = wbits
+    opt.load_in_lowbit_groupsize = groupsize
     model = init_model(opt)
     torch.set_default_dtype(torch.float)
     model = model.eval()
@@ -265,7 +268,7 @@ def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=Tru
     for name in ['output']:
         if name in layers:
             del layers[name]
-    make_quant_linear(model, layers, wbits, groupsize)
+    gptq_make_quant_linear(model, layers, wbits, groupsize)
 
     print('Loading model ...')
     if checkpoint.endswith('.safetensors'):
@@ -316,14 +319,12 @@ def benchmark(model, input_ids, device, check=False):
         else:
             torch.cuda.synchronize()
     with torch.no_grad():
-        attention_mask = torch.ones((1, input_ids.numel()), device=device)
         times = []
         for i in range(input_ids.numel()):
             tick = time.time()
             out = model(
                 input_ids[:, i].reshape((1,-1)),
                 past_key_values=cache['past'],
-                attention_mask=attention_mask[:, :(i + 1)].reshape((1, -1))
             )
             sync()
             times.append(time.time() - tick)
@@ -345,8 +346,8 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('model', type=str, help='llama model to load')
-    parser.add_argument('dataset', type=str, choices=['wikitext2', 'ptb', 'c4'], help='Where to extract calibration data from.')
+    parser.add_argument('--model', type=str, help='llama model to load')
+    parser.add_argument('--dataset', type=str, choices=['wikitext2', 'ptb', 'c4'], help='Where to extract calibration data from.')
     parser.add_argument('--nsamples', type=int, default=128, help='Number of calibration data samples.')
     parser.add_argument('--percdamp', type=float, default=.01, help='Percent of the average Hessian diagonal to use for dampening.')
     parser.add_argument('--nearest', action='store_true', help='Whether to run the RTN baseline.')
@@ -378,6 +379,7 @@ if __name__ == '__main__':
     
     if args.load:
         model = load_quant_model(args.load, args.wbits, args.groupsize, opt)
+        args.model = args.load
     else:
         opt.model_path = opt.model
         opt.init_from = "resume"
@@ -386,7 +388,7 @@ if __name__ == '__main__':
 
     from src.data.datautils import get_loaders
     dataloader, testloader = get_loaders(
-        args.dataset, nsamples=args.nsamples, model=args.model, seqlen=model.model.max_seq_len
+        args.dataset, nsamples=args.nsamples, vocab_file=opt.vocab_file, seqlen=model.model.max_seq_len
     )
 
     if not args.load and args.wbits < 16 and not args.nearest:

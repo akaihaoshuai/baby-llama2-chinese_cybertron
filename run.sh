@@ -4,7 +4,7 @@
 # 重新训练tokenizer
 # CUDA_VISIBLE_DEVICES=1 python train_tokenizer.py
 
-use_accelerate=false
+use_accelerate=true
 use_nohup=false
 
 if [ use_accelerate == true ] ; then

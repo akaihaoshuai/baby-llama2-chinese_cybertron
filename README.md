@@ -3,16 +3,9 @@
 
 本项目是便于自己学习LLM相关知识所建，实现了一些功能，但没有详细的测试，代码中难免存在一些bug。
 
-  
-
-<br />
-
-## 😭deepspeed训练代码目前有bug，由于精力有限，暂时还未修复。。。   
-
-<br />
 
 
-## 更新记录  
+## 更新记录
 >2024.03.20：支持GPTQ量化，可以运行。增加llm.int8/awq/onebit量化代码，但代码未测试，[https://zhuanlan.zhihu.com/p/686161543]
 
 >2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。[https://zhuanlan.zhihu.com/p/684907262]
@@ -86,32 +79,32 @@ python train_tokenizer.py
 # 重新训练tokenizer
 # CUDA_VISIBLE_DEVICES=1 python train_tokenizer.py
 
-use_accelerate=false
+use_accelerate=true
 use_nohup=false
 
 if [ use_accelerate == true ] ; then
     echo "[LLM] use accelerate"
     if [ use_nohup == true ] ; then
         echo "[LLM] use nohup"
-        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env pretrain.py >out/pretrain_1_log
-        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env fine_tuning.py >out/fine_tuning_log
+        CUDA_VISIBLE_DEVICES=0,1,2,3 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env pretrain.py >out/pretrain_1_log
+        CUDA_VISIBLE_DEVICES=0,1,2,3 nohup python -m torch.distributed.launch --nproc_per_node=8 --use_env fine_tuning.py >out/fine_tuning_log
         CUDA_VISIBLE_DEVICES=0 nohup python eval.py >out/eval_log
     else
-        CUDA_VISIBLE_DEVICES=0,1,5,6 python -m torch.distributed.launch --nproc_per_node=4 --use_env pretrain.py
-        CUDA_VISIBLE_DEVICES=0,1,5,6 python -m torch.distributed.launch --nproc_per_node=4 --use_env fine_tuning.py
-        CUDA_VISIBLE_DEVICES=1 python eval.py
+        CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env pretrain.py
+        CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env fine_tuning.py
+        CUDA_VISIBLE_DEVICES=0 python eval.py
     fi
-else  # deepspeed
+else  # deepspeed  可以训练，但loss暴涨，原因未知，精力问题，暂未排查，建议使用accelerator训练
     echo "[LLM] use deepspeed"
     if [ use_nohup == true ] ; then
         echo "[LLM] use nohup"
-        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup deepspeed --num_gpus=4 pretrain.py  --use_deepspeed True >out/pretrain_ds_log
-        CUDA_VISIBLE_DEVICES=1,2,3,4 nohup deepspeed --num_gpus=4 fine_tuning.py  --use_deepspeed True >out/fine_tuning_ds_log
-        CUDA_VISIBLE_DEVICES=10 nohup python eval.py >out/eval_ds_log
+        CUDA_VISIBLE_DEVICES=0,1,2,3 nohup deepspeed --num_gpus=4 pretrain.py  --use_deepspeed True >out/pretrain_ds_log
+        CUDA_VISIBLE_DEVICES=0,1,2,3 nohup deepspeed --num_gpus=4 fine_tuning.py  --use_deepspeed True >out/fine_tuning_ds_log
+        CUDA_VISIBLE_DEVICES=0 nohup python eval.py >out/eval_ds_log
     else
-        CUDA_VISIBLE_DEVICES=0,1,5,6 deepspeed --num_gpus=4 pretrain.py --use_deepspeed True
-        CUDA_VISIBLE_DEVICES=0,1,5,6 deepspeed --num_gpus=4 fine_tuning.py --use_deepspeed True
-        CUDA_VISIBLE_DEVICES=1 python eval.py
+        CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --num_gpus=4 pretrain.py --use_deepspeed True
+        CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --num_gpus=4 fine_tuning.py --use_deepspeed True
+        CUDA_VISIBLE_DEVICES=0 python eval.py
     fi
 fi
 

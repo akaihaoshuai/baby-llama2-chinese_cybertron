@@ -1,5 +1,5 @@
 ## baby-llama2-chinese-fix
-参考https://github.com/DLLXW/baby-llama2-chinese： 用于从头预训练+SFT一个小参数量的中文LLaMa2的仓库；24G单卡即可运行得到一个流畅中文问答的chat-llama2.
+从头预训练+SFT一个小参数量的LLM.
 
 本项目是便于自己学习LLM相关知识所建，实现了一些功能，但没有详细的测试，代码中难免存在一些bug。
 

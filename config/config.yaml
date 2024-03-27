@@ -53,6 +53,7 @@ model_params:
   cache_recent_size: 1024
   use_neftune: True
   neftune_noise_alpha: 0.1
+  act_fn : 'silu'  # silu/silu/relu/gelu_pytorch_tanh/gelu_new/gelu
   
 train_params:
   use_deepspeed: False

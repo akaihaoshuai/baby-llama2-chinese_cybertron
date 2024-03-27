@@ -44,6 +44,8 @@ model_params:
   vocab_size: 64793
   vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'
   model_type: 'Model'
+  act_fn : 'silu'  # silu/relu/gelu_pytorch_tanh/gelu_new/gelu
+
   use_shift_short_attn: False
   group_size_ratio: 0.25
   use_ssa_min_seq: 8192  # 2048*4

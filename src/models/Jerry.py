@@ -28,6 +28,7 @@ class JerryTransformerBlock(nn.Module):
             multiple_of=params.multiple_of,
             use_bias=params.use_bias,
             dropout=params.dropout,
+            act_fn=params.act_fn,
         )
         self.layer_idx = layer_idx
         self.input_layernorm = RMSNorm(params.dim, eps=params.norm_eps)

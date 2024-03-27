@@ -19,6 +19,7 @@ class ModelArgs:
     use_ssa_min_seq : int = 8192
     dtype : str = 'float16'
     model_type : str = 'Model'
+    act_fn : str = 'silu'  # silu_and_mul/silu/relu/gelu_pytorch_tanh/gelu_new/gelu
     
     flash_attention : bool = False
     use_shift_short_attn : bool = False
@@ -66,6 +67,8 @@ def get_model_args(opt, train_flag):
         dropout=opt.dropout,
         use_bias=opt.use_bias,
         model_type = 'Model',
+        act_fn = opt.act_fn,
+
         flash_attention = False,
         use_shift_short_attn=opt.use_shift_short_attn,
         group_size_ratio=opt.group_size_ratio,

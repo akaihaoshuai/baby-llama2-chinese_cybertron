@@ -36,6 +36,7 @@ def get_parser_args(parser=None):
     parser.add_argument("--load_in_lowbit", type=int, default=-1, choices=[-1, 2, 3, 4]) 
     parser.add_argument("--load_in_lowbit_groupsize", type=int, default=-1)
     parser.add_argument('--load_in_quant_type', type=str, default="gptq", choices=['gptq', 'llm_int8', 'awq', 'onebit']) # 暂只支持gptq
+    parser.add_argument('--act_fn', type=str, default="silu", choices=['silu', 'silu', 'relu', 'gelu_pytorch_tanh', 'gelu_new', 'gelu']) # 暂只支持gptq
 
     parser.add_argument("--dtype", type=str, default='float16', help="path to config")
     parser.add_argument("--vocab_size", type=int, default=64793)
@@ -136,6 +137,8 @@ def parser_model_config(opt):
         opt.load_in_lowbit_groupsize = model_params_yaml.get('load_in_lowbit_groupsize', opt.load_in_lowbit_groupsize)
         opt.load_in_quant_type = model_params_yaml.get('load_in_quant_type', opt.load_in_quant_type)
         opt.dtype = model_params_yaml.get('dtype', opt.dtype)
+        opt.act_fn = model_params_yaml.get('act_fn', opt.act_fn)
+        
         opt.vocab_size = model_params_yaml.get('vocab_size', opt.vocab_size)
         opt.vocab_file = model_params_yaml.get('vocab_file', opt.vocab_file)
         opt.model_type = model_params_yaml.get('model_type', opt.model_type)

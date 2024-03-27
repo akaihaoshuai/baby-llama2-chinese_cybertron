@@ -1,6 +1,7 @@
 """Custom normalization layers."""
 import torch
 import torch.nn as nn
+from src.layers.csrc import layernorm_ops
 
 
 class RMSNorm(torch.nn.Module):
@@ -17,6 +18,7 @@ class RMSNorm(torch.nn.Module):
         return output * self.weight
     
 
+# 借鉴vllm，但是估计不支持bs>1，只能bs=1时使用
 class RMSNormOpt(nn.Module):
     """Root mean square normalization.
 
@@ -26,16 +28,15 @@ class RMSNormOpt(nn.Module):
 
     def __init__(
         self,
-        hidden_size: int,
+        dim: int,
         eps: float = 1e-6,
     ) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.ones(dim))
         self.variance_epsilon = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = torch.empty_like(x)
-        from vllm import layernorm_ops
 
         layernorm_ops.rms_norm(
             out,

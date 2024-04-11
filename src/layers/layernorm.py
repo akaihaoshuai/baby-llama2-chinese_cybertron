@@ -1,7 +1,6 @@
 """Custom normalization layers."""
 import torch
 import torch.nn as nn
-from src.layers.csrc import layernorm_ops
 
 
 class RMSNorm(torch.nn.Module):
@@ -36,6 +35,7 @@ class RMSNormOpt(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from src.layers.csrc import layernorm_ops
         out = torch.empty_like(x)
 
         layernorm_ops.rms_norm(

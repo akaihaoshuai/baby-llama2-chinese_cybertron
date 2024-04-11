@@ -36,3 +36,7 @@ fi
 
 # 量化模型
 # CUDA_VISIBLE_DEVICES=0 python quant_model.py --model ./out/pretrain.ckpt --dataset wikitext2 --wbits 4
+
+# 推理
+# CUDA_VISIBLE_DEVICES=0 python web_inference.py --model ./out/pretrain.ckpt
+# CUDA_VISIBLE_DEVICES=0 python inference.py --model ./out/pretrain.ckpt

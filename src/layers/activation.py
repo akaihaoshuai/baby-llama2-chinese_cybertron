@@ -2,8 +2,6 @@
 import torch
 import torch.nn as nn
 
-from src.layers.csrc import activation_ops
-
 
 class SiluAndMul(nn.Module):
     """An activation function for SwiGLU.
@@ -16,6 +14,7 @@ class SiluAndMul(nn.Module):
     """
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from src.layers.csrc import activation_ops
         num_tokens = x.shape[0]
         d = x.shape[1] // 2
         out = torch.empty(num_tokens, d, dtype=x.dtype, device=x.device)
@@ -26,6 +25,7 @@ class SiluAndMul(nn.Module):
 class NewGELU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from src.layers.csrc import activation_ops
         num_tokens = x.shape[0]
         d = x.shape[1]
         out = torch.empty(num_tokens, d, dtype=x.dtype, device=x.device)
@@ -36,6 +36,7 @@ class NewGELU(nn.Module):
 class FastGELU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from src.layers.csrc import activation_ops
         num_tokens = x.shape[0]
         d = x.shape[1]
         out = torch.empty(num_tokens, d, dtype=x.dtype, device=x.device)

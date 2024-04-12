@@ -116,7 +116,7 @@ def parser_all_config(opt):
     return opt, config
 
 def parser_model_config(opt):
-    with open(opt.config) as f:
+    with open(opt.config, 'rb') as f:
         config = yaml.load(f, Loader=yaml.Loader)
     
     model_params_yaml = config.get('model_params')
@@ -154,7 +154,7 @@ def parser_model_config(opt):
     return opt,config
 
 def parser_other_config_except_model(opt):
-    with open(opt.config) as f:
+    with open(opt.config, "rb") as f:
         config = yaml.load(f, Loader=yaml.Loader)
     
     dataset_params_yaml = config.get('dataset_params')

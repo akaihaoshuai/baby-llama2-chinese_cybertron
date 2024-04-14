@@ -118,16 +118,13 @@ def init_model(opt, train_flag=False):
     elif opt.init_from == "resume":
         print(f"Resuming training from {opt.model_path}")
         # resume training from a checkpoint.
-        ckpt_path = os.path.join(opt.model_path, "best.pth")
-        checkpoint = torch.load(ckpt_path, map_location=opt.device)
-        checkpoint_model_args = checkpoint["model_args"]
-        # force these config attributes to be equal otherwise we can't even resume training
-        # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ["dim", "n_layers", "n_heads", "n_kv_heads", "vocab_size", "multiple_of", "max_seq_len"]:
-            opt[k] = checkpoint_model_args[k]
+        if os.path.isdir(opt.model_path):
+            ckpt_path = os.path.join(opt.model_path, "best.pth")
+        elif opt.model_path.endswith('pth'):
+            ckpt_path = opt.model_path
+        state_dict = torch.load(ckpt_path, map_location = opt.device)
         # create the model
         model = _get_model_architecture(opt.model_type)(get_model_args(opt, train_flag=train_flag))
-        state_dict = checkpoint["model"]
         # fix the keys of the state dictionary :(
         # honestly no idea how checkpoints sometimes get this prefix, have to debug more
         unwanted_prefix = "_orig_mod."
@@ -135,8 +132,6 @@ def init_model(opt, train_flag=False):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
         model.load_state_dict(state_dict)
-        iter_num = checkpoint["iter_num"]
-        best_val_loss = checkpoint["best_val_loss"]
     return model
 
 
@@ -193,13 +188,13 @@ def init_ddp(ddp, opt):
 
 
 @torch.no_grad()
-def valid_model(model, val_loader, logger, ctx=None):
+def valid_model(model, val_loader, logger, device, ctx=None):
     losses = []
     model.eval()
 
     for _, (X, Y) in enumerate(val_loader):
-        X=X.to(model.device)
-        Y=Y.to(model.device)
+        X=X.to(device)
+        Y=Y.to(device)
         if ctx is not None:
             with ctx:
                 output = model(X, Y)

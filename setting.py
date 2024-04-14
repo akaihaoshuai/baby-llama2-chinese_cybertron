@@ -6,8 +6,10 @@ import math
 def get_parser_args(parser=None):
     if parser is None:
         parser = ArgumentParser()
+        
     parser.add_argument("--prompt", type=str, default='你好', help="path to config")
-    parser.add_argument("--config", type=str, default='config/config.yaml', help="path to config")
+    parser.add_argument("--model_config", type=str, default='config/config.yaml', help="path to config")
+    parser.add_argument("--train_config", type=str, default='config/train.yaml', help="path to config")
     parser.add_argument("--ds_config", type=str, default='config/deepspeed.json', help="path to config")
     parser.add_argument("--train_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
@@ -18,9 +20,9 @@ def get_parser_args(parser=None):
     parser.add_argument("--out_dir", type=str, default='out', help="path to config")
     parser.add_argument("--model_path", type=str, default='best.pth', help="path to config")
     parser.add_argument("--lora_path", type=str, default='', help="")
-    parser.add_argument("--max_seq_len", type=int, default=1024)
 
     # model param
+    parser.add_argument("--max_seq_len", type=int, default=1024)
     parser.add_argument("--dim", type=int, default=512)
     parser.add_argument("--n_layers", type=int, default=8)
     parser.add_argument("--n_heads", type=int, default=8)
@@ -111,16 +113,17 @@ def get_parser_args(parser=None):
 
 
 def parser_all_config(opt):
-    opt, _ = parser_model_config(opt)
-    opt, config = parser_other_config_except_model(opt)
-    return opt, config
+    opt, model_config = parser_model_config(opt)
+    opt, train_config = parser_train_config(opt)
+    return opt, model_config, train_config
 
 def parser_model_config(opt):
-    with open(opt.config, 'rb') as f:
-        config = yaml.load(f, Loader=yaml.Loader)
+    with open(opt.model_config) as f:
+        model_config = yaml.load(f, Loader=yaml.Loader)
     
-    model_params_yaml = config.get('model_params')
+    model_params_yaml = model_config.get('model_params')
     if None != model_params_yaml:
+        opt.max_seq_len = model_params_yaml.get('max_seq_len', opt.max_seq_len)
         opt.dim = model_params_yaml.get('dim', opt.dim)
         opt.n_layers = model_params_yaml.get('n_layers', opt.n_layers)
         opt.n_heads = model_params_yaml.get('n_heads', opt.n_heads)
@@ -151,13 +154,13 @@ def parser_model_config(opt):
         opt.cache_start_size = model_params_yaml.get('cache_start_size', opt.cache_start_size)
         opt.cache_recent_size = model_params_yaml.get('cache_recent_size', opt.cache_recent_size)
 
-    return opt,config
+    return opt, model_config
 
-def parser_other_config_except_model(opt):
-    with open(opt.config, "rb") as f:
-        config = yaml.load(f, Loader=yaml.Loader)
+def parser_train_config(opt):
+    with open(opt.train_config) as f:
+        train_config = yaml.load(f, Loader=yaml.Loader)
     
-    dataset_params_yaml = config.get('dataset_params')
+    dataset_params_yaml = train_config.get('dataset_params')
     if None != dataset_params_yaml:
         opt.train_data_path = dataset_params_yaml.get('train_data_path', opt.train_data_path)
         opt.valid_data_path = dataset_params_yaml.get('valid_data_path', opt.valid_data_path)
@@ -166,13 +169,12 @@ def parser_other_config_except_model(opt):
         opt.sft_long_data_path_val = dataset_params_yaml.get('sft_long_data_path_val', opt.sft_long_data_path_val)
         opt.test_data_path = dataset_params_yaml.get('test_data_path', opt.test_data_path)
     
-    opt.model_path = config.get('model_path',opt.model_path)
-    opt.max_seq_len = config.get('max_seq_len', opt.max_seq_len)
-    opt.merge_lora_to_save = config.get('merge_lora_to_save', opt.merge_lora_to_save)
-    opt.merge_lora_on_load = config.get('merge_lora_on_load', opt.merge_lora_on_load)
+    opt.model_path = train_config.get('model_path',opt.model_path)
+    opt.merge_lora_to_save = train_config.get('merge_lora_to_save', opt.merge_lora_to_save)
+    opt.merge_lora_on_load = train_config.get('merge_lora_on_load', opt.merge_lora_on_load)
 
     # train
-    train_params_yaml = config.get('train_params')
+    train_params_yaml = train_config.get('train_params')
     if None != train_params_yaml:
         opt.use_deepspeed = train_params_yaml.get('use_deepspeed', opt.use_deepspeed)
         opt.max_epoch = train_params_yaml.get('max_epoch', opt.max_epoch)
@@ -197,7 +199,7 @@ def parser_other_config_except_model(opt):
         opt.compile = train_params_yaml.get('compile', opt.compile)
         opt.optimizer_type = train_params_yaml.get('optimizer_type', opt.optimizer_type)
 
-    # fine_tuning_params_yaml = config.get('fine_tuning_params')
+    # fine_tuning_params_yaml = train_config.get('fine_tuning_params')
     # if None != fine_tuning_params_yaml:
     #     opt.ft_type = fine_tuning_params_yaml.get('ft_type', opt.ft_type)
     #     opt.lora_mudule = fine_tuning_params_yaml.get('lora_mudule', opt.lora_mudule)
@@ -207,7 +209,7 @@ def parser_other_config_except_model(opt):
     #     opt.lora_r_dropout = fine_tuning_params_yaml.get('lora_r_dropout', opt.lora_r_dropout)
 
     # eval
-    eval_params_yaml = config.get('eval_params')
+    eval_params_yaml = train_config.get('eval_params')
     if None != eval_params_yaml:
         opt.max_new_tokens = eval_params_yaml.get('max_new_tokens', opt.max_new_tokens)
         opt.temperature = eval_params_yaml.get('temperature', opt.temperature)
@@ -216,7 +218,7 @@ def parser_other_config_except_model(opt):
         opt.seed = eval_params_yaml.get('seed', opt.seed)
         opt.shot = eval_params_yaml.get('shot', opt.shot)
 
-    return opt,config
+    return opt, train_config
 
 def set_fine_tuning_paras_to_config(opt, config):
     fine_tuning_params = dict()
@@ -228,12 +230,13 @@ def set_fine_tuning_paras_to_config(opt, config):
     fine_tuning_params['lora_r_dropout'] = opt.lora_r_dropout
     config['fine_tuning_params'] = fine_tuning_params
 
-    ori_max_seq_len = config['max_seq_len']
     model_params_yaml = config.get('model_params')
     if None != model_params_yaml:
         orig_rope_scaling_factor = model_params_yaml.get('rope_scaling_factor', 1.0)
+        ori_max_seq_len = model_params_yaml.get('max_seq_len', 1024)
     else:
         orig_rope_scaling_factor = 1.0
+        ori_max_seq_len = 1024
 
     if ori_max_seq_len:
         ori_max_seq_len *= orig_rope_scaling_factor

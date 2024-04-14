@@ -172,14 +172,14 @@ def eval(model_path_name,opt,logger):
 if __name__=="__main__":
     # -----------------------------------------------------------------------------
     opt = get_parser_args()
-    opt, config = parser_all_config(opt)
+    opt, _, _ = parser_all_config(opt)
 
     # start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
     #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
     #exec(open('configurator.py').read()) # overrides from command line or config file
     # -----------------------------------------------------------------------------
     from src.share import get_logger
-    log_dir = os.path.join(opt.out_dir,'eval_all.log')
+    log_dir = os.path.join(opt.out_dir, 'eval_all.log')
     if os.path.exists(log_dir):
         os.remove(log_dir) 
     logger = get_logger(log_dir)
@@ -189,12 +189,9 @@ if __name__=="__main__":
         model_path_ = os.path.join(opt.out_dir, model_path)
 
         if os.path.isdir(model_path_):
-            if 'ds' in model_path_:
-                opt.config = os.path.join(model_path_, 'config_ds.yaml')
-            else:
-                opt.config = os.path.join(model_path_, 'config.yaml')
+            opt.model_config = os.path.join(model_path_, 'config.yaml')
 
-            opt,_ = parser_model_config(opt)
+            opt, _ = parser_model_config(opt)
 
             model_list = os.listdir(model_path_)
             for model_name in model_list:

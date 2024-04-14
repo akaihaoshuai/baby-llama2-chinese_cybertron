@@ -1,97 +1,30 @@
-dataset_params:
-  train_data_path: [
-        './data/pretrain_data.bin'
-        #'./data/baidubaike_563w.bin',
-        #'./data/medical_book.bin',
-        # './data/medical_encyclopedia.bin',
-        # './data/medical_qa.bin',
-        # './data/wiki.bin'
-    ]
-  valid_data_path: [
-        './data/valid_data.bin'
-    ]
-  sft_data_path: './data/sft_data.csv'
-  test_data_path: [
-        'data/test.json',
-        'data/test_zh_0.json',
-        'data/test_en_1.json',
-    ]
-  
-  sft_long_data_path_train: './data/sft_long_data_train.csv'
-  sft_long_data_path_val: './data/sft_long_data_val.csv'
-
-model_path: 'best.model'
-max_seq_len: 1024
-merge_lora_to_save: False
-merge_lora_on_load: False
-
 model_params:
-  dim: 1024
-  n_layers: 28
-  n_heads: 16        # 要能被dim整除
-  n_kv_heads: 8      # 0及其以下,则取n_heads的值,为MHQ.为1则是MQA,大于1且小于n_layers则为GQA
-  multiple_of: 32
-  rope_beta: 10000.0
-  rope_scaling_factor: 1.0
-  rope_scaling_type: 'linear'  # linear/dynamic
+  act_fn: silu
+  architectures: JerryForCausalLM
+  cache_recent_size: 1024
+  cache_start_size: 10
+  cache_type: recent
+  dim: 256
   dropout: 0.0
-  norm_eps: 0.00001
-  use_bias: False
-  flash_attention: False
+  dtype: float16
+  flash_attention: false
+  group_size_ratio: 0.25
   load_in_4bit: -1
   load_in_lowbit_groupsize: -1
-  load_in_quant_type: 'gptq'  # gptq/llm_int8/awq/onebit  暂只支持gptq
-  dtype: 'float16'
-  vocab_size: 64793
-  vocab_file: './tokenizer_model/chatglm_tokenizer/tokenizer.model'
-  model_type: 'Model'
-  use_shift_short_attn: False
-  group_size_ratio: 0.25
-  use_ssa_min_seq: 8192  # 2048*4
-  cache_type: 'recent'  # all/recent
-  cache_start_size: 10
-  cache_recent_size: 1024
-  use_neftune: True
+  load_in_quant_type: gptq
+  max_seq_len: 256
+  multiple_of: 32
+  n_heads: 8
+  n_kv_heads: 4
+  n_layers: 12
   neftune_noise_alpha: 0.1
-  act_fn : 'silu'  # silu/silu/relu/gelu_pytorch_tanh/gelu_new/gelu
-  
-train_params:
-  use_deepspeed: False
-  max_epoch: 3
-  log_iters: 200
-  save_iters: 20000
-  eval_iters: 20000
-  eval_only: False
-  always_save_ckpt: True
-  init_from: 'scratch'
-  grad_accum_steps: 64
-  batch_size: 4
-  learning_rate: 0.0003
-  weight_decay: 0.1
-  beta1: 0.9
-  beta2: 0.95
-  grad_clip: 1.0
-  decay_lr: True
-  warmup_iters: 1000
-  lr_decay_iters: 80000
-  min_lr: 0.00001
-  backend: 'nccl'
-  device: 'cuda'
-  compile: False
-  optimizer_type: 'AdamW' # AdamW/GaLoreAdamW/GaLoreAdamW8bit/GaLoreAdafactor
-
-fine_tuning_params:
-  ft_type: 'full_ft'  # full_ft/lora/qlora 
-  lora_mudule: 'all'  # linear/embedding/all
-  lora_attn_dim: 8
-  lora_attn_alpha: 128
-  lora_dropout: 0.0
-  lora_r_dropout: 0.0
-
-eval_params:
-  max_new_tokens: 100
-  temperature: 1.0
-  top_k: 30
-  top_p: 0.4
-  seed: 1337
-  shot: 0
+  norm_eps: 1.0e-05
+  rope_beta: 10000.0
+  rope_scaling_factor: 1.0
+  rope_scaling_type: linear
+  use_bias: false
+  use_neftune: true
+  use_shift_short_attn: false
+  use_ssa_min_seq: 8192
+  vocab_file: ./tokenizer_model/chatglm_tokenizer/tokenizer.model
+  vocab_size: 64793

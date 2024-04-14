@@ -2,7 +2,6 @@ import os
 from argparse import ArgumentParser
 from src.utils import *
 from setting import *
-from src.models.Jerry import Jerry
 from tokenizer_model import ChatGLMTokenizer
 from src.share import *
 
@@ -28,15 +27,12 @@ def get_model(opt):
     return model, tokenizer
 
 
-def inference(opt):
-    if os.path.isdir(opt.model_path):
-        model_dir = opt.model_path
-        opt.model_path = [os.path.join(model_dir, file) for file in os.listdir(model_dir) if file.endswith('.pth')][0]
-    else:
-        model_dir = os.path.dirname(opt.model_path)
+def naive_rag(opt):
+    print("naive_rag...")
+    model_dir = os.path.dirname(opt.model_path)
     opt.config = os.path.join(model_dir, 'config.yaml')
     if not os.path.exists(opt.config):
-        opt.config = os.path.join(model_dir, 'config.json')
+        opt.config = os.path.join(model_dir, 'config_ds.yaml')
 
     opt, config = parser_model_config(opt)
 
@@ -48,13 +44,39 @@ def inference(opt):
                        max_new_tokens=opt.max_new_tokens, 
                        temperature=opt.temperature, 
                        top_k=opt.top_k)
-    predict=tokenizer.decode(y)
 
-    print(f'prompt: {opt.prompt}. /n response: {predict}')
+    from src.rag.naive_rag.VectorBase import VectorStore
+    vector = VectorStore()
+    vector.load_vector('./storage') # 加载本地的数据库
+
+    from src.rag.naive_rag.Embeddings import JinaEmbedding
+    embedding = JinaEmbedding()
+    question = 'git的分支原理？'
+
+    content = vector.query(question, EmbeddingModel=embedding, k=1)[0]
+
+    chat = OpenAIChat(model='gpt-3.5-turbo-1106')
+    print(chat.chat(question, [], content))
+
+
+def advanced_rag(opt):
+    print("advanced_rag...")
+
+
+def modular_rag(opt):
+    print("modular_rag...")
+
 
 
 if __name__=="__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--rag_type", type=int, default='naive_rag', choices=['naive_rag', 'advanced_rag', 'modular_rag']) 
     opt = get_parser_args()
     opt.model_path = 'out/pretrain_layer18_seqlen1024_dim1536_accum64_h12_hkv2/epoch_0_step200.pth'
     
-    inference(opt)
+    if opt.rag_type =='naive_rag':
+        naive_rag(opt)
+    elif opt.rag_type =='advanced_rag':
+        advanced_rag(opt)
+    else:
+        modular_rag(opt)

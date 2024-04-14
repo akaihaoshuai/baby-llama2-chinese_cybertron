@@ -74,8 +74,8 @@ def pretrain_epoch(epoch, model_opt, raw_model,
             del(ave_time[0])
         # print(f'model train ave time: {round(mean(ave_time),6)} s')
 
-        if step > 0 and step %opt.eval_iters == 0:
-            val_loss=valid_model(model_opt, val_loader, logger, ctx)
+        if step > 0 and step % opt.eval_iters == 0 and val_loader is not None:
+            val_loss = valid_model(model_opt, val_loader, logger, opt.device, ctx)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
@@ -105,7 +105,7 @@ def pretrain_epoch(epoch, model_opt, raw_model,
         
 
 def pretrain_model(opt):
-    master_process,ddp_local_rank,ctx=init_ddp(ddp, opt)
+    master_process, ddp_local_rank, ctx = init_ddp(ddp, opt)
 
     if opt.use_deepspeed:
         print(f"====================use deepspeed====================")
@@ -206,7 +206,7 @@ def pretrain_model(opt):
                        scaler, optimizer, 
                        opt, ctx, master_process)
         
-        val_loss=valid_model(model_opt, val_loader, logger, ctx)
+        val_loss = valid_model(model_opt, val_loader, logger, opt.device, ctx)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
@@ -224,16 +224,13 @@ def pretrain_model(opt):
 # I/O
 if __name__=="__main__":
     opt = get_parser_args()
-    if opt.use_deepspeed:
-        opt.config = 'config/config_ds.yaml'
-    else:
-        opt.config = 'config/config.yaml'
-    opt, config = parser_all_config(opt)
+    opt.model_config = 'config/config.yaml'
+    opt.train_config = 'config/train.yaml'
+    opt, model_config, train_config = parser_all_config(opt)
 
     # -----------------------------------------------------------------------------
     config_keys = [
-        k
-        for k, v in globals().items()
+        k for k, v in globals().items()
         if not k.startswith("_") and isinstance(v, (int, float, bool, str))
     ]
     # exec(open("configurator.py").read())  # overrides from command line or config file
@@ -249,7 +246,7 @@ if __name__=="__main__":
     # 保存一份参数
     with open(os.path.join(save_dir,'config.yaml'), "w") as file:
         import yaml
-        file.write(yaml.dump(config))
+        file.write(yaml.dump(model_config))
 
     log_dir = os.path.join(save_dir,'log.log')
     # if os.path.exists(log_dir):

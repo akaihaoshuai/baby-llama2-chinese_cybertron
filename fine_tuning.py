@@ -83,7 +83,7 @@ def sft_epoch(epoch,model_opt, raw_model,
         # print(f'model train ave time: {round(mean(ave_time),6)} s')
 
         if step > 0 and step % opt.eval_iters == 0:
-            val_loss=valid_model(model_opt, val_loader, logger, ctx)
+            val_loss = valid_model(model_opt, val_loader, logger, opt.device, ctx)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
@@ -226,7 +226,7 @@ def ft_model(opt, model_name_path):
                   optimizer,scaler,
                   ddp,opt,ctx,logger, master_process)
         
-        val_loss=valid_model(model, val_loader, logger, ctx)
+        val_loss = valid_model(model, val_loader, logger, opt.device, ctx)
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
@@ -244,48 +244,41 @@ def ft_model(opt, model_name_path):
 # I/O
 if __name__=="__main__":
     opt = get_parser_args()
-    if opt.use_deepspeed:
-        opt.config = 'config/config_ds.yaml'
-    else:
-        opt.config = 'config/config.yaml'
-    opt, config = parser_all_config(opt)
-    opt.ft_type = 'full_ft'
-    opt.model_path = './out/pretrain_layer28_seqlen1024_dim1024_accum64_h16_hkv8'  # 输入文件夹
+    opt, model_config, train_config = parser_all_config(opt)
+    opt.model_path = './out/pretrain_layer12_seqlen256_dim256_accum64_h8_hkv4'  # 输入文件夹
 
     # 遍历全部sft处理
     if opt.use_deepspeed:
-        save_config_file_name = 'config_ds.yaml'
         if opt.ft_type == 'lora':
             save_dir = opt.model_path.replace('pretrain', 'ft_lora_ds')
         else:
             save_dir = opt.model_path.replace('pretrain', 'ft_full_ds')
     else:
-        save_config_file_name = 'config.yaml'
         if opt.ft_type == 'lora':
             save_dir = opt.model_path.replace('pretrain', 'ft_lora')
         else:
             save_dir = opt.model_path.replace('pretrain', 'ft_full')
 
     if os.path.exists(os.path.join(opt.model_path, 'config.yaml')):
-        opt.config = os.path.join(opt.model_path, 'config.yaml')
+        opt.model_config = os.path.join(opt.model_path, 'config.yaml')
     else:
-        opt.config = os.path.join(opt.model_path, 'config_ds.yaml')
+        opt.model_config = './config/config.model'
 
-    opt, config = parser_model_config(opt)
+    opt, model_config = parser_model_config(opt)
 
     if opt.use_deepspeed:
         train_params = dict()
         train_params['use_deepspeed'] = opt.use_deepspeed
-        config['train_params'] = train_params
+        train_config['train_params'] = train_params
     
-    set_fine_tuning_paras_to_config(opt, config)
+    set_fine_tuning_paras_to_config(opt, train_config)
 
     if not os.path.exists(save_dir): os.makedirs(save_dir)
     
     # 保存一份参数
-    with open(os.path.join(save_dir, save_config_file_name), "w") as file:
+    with open(os.path.join(save_dir, 'config.yaml'), "w") as file:
         import yaml
-        file.write(yaml.dump(config))
+        file.write(yaml.dump(model_config))
 
     model_list = os.listdir(opt.model_path)
     for model_ in model_list:
@@ -303,8 +296,7 @@ if __name__=="__main__":
 
             # -----------------------------------------------------------------------------
             config_keys = [
-                k
-                for k, v in globals().items()
+                k for k, v in globals().items()
                 if not k.startswith("_") and isinstance(v, (int, float, bool, str))
             ]
             # exec(open("configurator.py").read())  # overrides from command line or config file

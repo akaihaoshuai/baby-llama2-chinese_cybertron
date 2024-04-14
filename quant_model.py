@@ -3,18 +3,18 @@ import time
 import torch
 import torch.nn as nn
 
-from src.quant.gptq import *
+from src.quant.gptq.gptq import *
 from src.share import init_model
 from src.utils import find_layers
-from src.quant.quant.quantizer import Quantizer
-from src.quant.quant.quant_linear import QuantLinear
-from src.quant.gptq import Observer
+from src.quant.gptq.quant.quantizer import Quantizer
+from src.quant.gptq.quant.quant_linear import QuantLinear
+from src.quant.gptq.gptq import Observer
 from src.quant.share import gptq_make_quant_linear
-from src.quant.quant import make_quant_attn
-from src.quant.quant import make_quant_norm
-from src.quant.quant import make_fused_mlp
-from src.quant.quant import autotune_warmup_linear
-from src.quant.quant import autotune_warmup_fused
+from src.quant.gptq.quant import make_quant_attn
+from src.quant.gptq.quant import make_quant_norm
+from src.quant.gptq.quant import make_fused_mlp
+from src.quant.gptq.quant import autotune_warmup_linear
+from src.quant.gptq.quant import autotune_warmup_fused
 
 @torch.no_grad()
 def quant_sequential(model, dataloader, dev):
@@ -351,7 +351,7 @@ if __name__ == '__main__':
     parser.add_argument('--nsamples', type=int, default=128, help='Number of calibration data samples.')
     parser.add_argument('--percdamp', type=float, default=.01, help='Percent of the average Hessian diagonal to use for dampening.')
     parser.add_argument('--nearest', action='store_true', help='Whether to run the RTN baseline.')
-    parser.add_argument('--wbits', type=int, default=16, choices=[2, 3, 4, 8, 16], help='#bits to use for quantization; use 16 for evaluating base model.')
+    parser.add_argument('--wbits', type=int, default=4, choices=[2, 3, 4, 8, 16], help='#bits to use for quantization; use 16 for evaluating base model.')
     parser.add_argument('--trits', action='store_true', help='Whether to use trits for quantization.')
     parser.add_argument('--groupsize', type=int, default=-1, help='Groupsize to use for quantization; default uses full row.')
     parser.add_argument('--eval', action='store_true', help='evaluate quantized model.')
@@ -387,12 +387,14 @@ if __name__ == '__main__':
         model.eval()
 
     from src.data.datautils import get_loaders
+    print('load dataset......')
     dataloader, testloader = get_loaders(
         args.dataset, nsamples=args.nsamples, vocab_file=opt.vocab_file, seqlen=model.model.max_seq_len
     )
 
     if not args.load and args.wbits < 16 and not args.nearest:
         tick = time.time()
+        print('quant_sequential......')
         quantizers = quant_sequential(model, dataloader, opt.device)
         print(time.time() - tick)
 

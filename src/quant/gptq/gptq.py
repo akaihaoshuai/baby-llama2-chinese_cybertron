@@ -6,9 +6,9 @@ import torch.nn as nn
 import transformers
 from texttable import Texttable
 
-from src.quant.quant import *
-from src.quant.utils.modelutils import *
-from src.quant.quant.quantizer import Quantizer
+from src.quant.gptq.quant import *
+from src.quant.gptq.utils.modelutils import *
+from src.quant.gptq.quant.quantizer import Quantizer
 
 
 DEBUG = False 

@@ -19,20 +19,20 @@ class JerryTransformerBlock(nn.Module):
     def __init__(self, layer_idx: int, params):
         super().__init__()
         self.n_heads = params.n_heads
-        self.dim = params.dim
-        self.head_dim = params.dim // params.n_heads
+        self.hidden_size = params.hidden_size
+        self.head_dim = params.hidden_size // params.n_heads
         self.self_attn = Attention(params, layer_idx)
         self.mlp = FeedForward(
-            dim=params.dim,
-            hidden_dim=4 * params.dim,
+            dim=params.hidden_size,
+            hidden_dim=4 * params.hidden_size,
             multiple_of=params.multiple_of,
             use_bias=params.use_bias,
             dropout=params.dropout,
             act_fn=params.act_fn,
         )
         self.layer_idx = layer_idx
-        self.input_layernorm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.post_layernorm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.input_layernorm = RMSNorm(params.hidden_size, eps=params.norm_eps)
+        self.post_layernorm = RMSNorm(params.hidden_size, eps=params.norm_eps)
 
     def forward(self, 
                 hidden_status, 
@@ -53,17 +53,18 @@ class JerryTransformerBlock(nn.Module):
         return hidden_status, past_key_value
 
 
-class Jerry(nn.Module):
+class JerryModel(nn.Module):
     def __init__(self, params: ModelArgs):
         super().__init__()
 
         self.params = params
+        self.padding_idx = params.pad_token_id
         self.vocab_size = params.vocab_size
         self.n_layers = params.n_layers
         self.is_train = params.is_train
         self.flash_attention = params.flash_attention
         self.max_seq_len = params.max_seq_len
-        self.dim = params.dim
+        self.hidden_size = params.hidden_size
 
         self.use_neftune = params.use_neftune
         self.neftune_noise_alpha = params.neftune_noise_alpha
@@ -71,18 +72,22 @@ class Jerry(nn.Module):
         if (params.ft_type == 'lora' or params.lora_path != '') \
             and (params.lora_mudule == 'embedding' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRAEmbedding
-            self.tok_embeddings = LoRAEmbedding(params.vocab_size, params.dim,
+            self.tok_embeddings = LoRAEmbedding(params.vocab_size, params.hidden_size,
                                                 r=params.lora_attn_dim,
                                                 lora_alpha=params.lora_attn_alpha,
                                                 merge_weights=False)
         else:
-            self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
+            self.tok_embeddings = nn.Embedding(params.vocab_size, params.hidden_size)
         
         self.dropout = nn.Dropout(params.dropout)
         self.layers = torch.nn.ModuleList()
         for layer_idx in range(params.n_layers):
             self.layers.append(JerryTransformerBlock(layer_idx, params))
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+
+        if params.do_layer_norm_before:
+            self.norm = RMSNorm(params.hidden_size, eps=params.norm_eps)
+        else:
+            self.norm = None
 
         self.attention_mask= None
 
@@ -154,7 +159,8 @@ class Jerry(nn.Module):
             if use_kv_cache:
                 new_past_key_values.append(past_key_value)
                 
-        hidden_states = self.norm(hidden_states)
+        if self.norm is not None:
+            hidden_states = self.norm(hidden_states)
 
         return BaseLLMModelOutput(hidden_states=hidden_states, 
                                   past_key_values=new_past_key_values)
@@ -166,7 +172,7 @@ class Jerry(nn.Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = sum(p.numel() for p in self.parameters())
         cfg = self.params
-        L, H, Q, T = cfg.n_layers, cfg.n_heads, cfg.dim//cfg.n_heads, cfg.max_seq_len
+        L, H, Q, T = cfg.n_layers, cfg.n_heads, cfg.hidden_size//cfg.n_heads, cfg.max_seq_len
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -235,8 +241,8 @@ class JerryForCausalLM(nn.Module):
         super().__init__()
         params.vocab_size = ((params.vocab_size + 63) // 64) * 64
 
-        self.model = Jerry(params)
-        self.output = nn.Linear(params.dim, params.vocab_size, bias=params.use_bias)
+        self.model = JerryModel(params)
+        self.output = nn.Linear(params.hidden_size, params.vocab_size, bias=params.use_bias)
         self.sampler = Sampler()
 
         # share the unembedding parameters with the embedding parameters

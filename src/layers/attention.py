@@ -29,8 +29,8 @@ class Attention(nn.Module):
         self.num_heads = params.n_heads // model_parallel_size
         self.num_kv_heads = self.n_kv_heads // model_parallel_size
         self.num_kv_rep_groups = self.num_heads // self.num_kv_heads
-        self.head_dim = params.dim // params.n_heads
-        self.wo = nn.Linear(params.n_heads * self.head_dim, params.dim, bias=params.use_bias)
+        self.head_dim = params.hidden_size // params.n_heads
+        self.wo = nn.Linear(params.n_heads * self.head_dim, params.hidden_size, bias=params.use_bias)
         self.attn_dropout = nn.Dropout(params.dropout)
         self.resid_dropout = nn.Dropout(params.dropout)
         self.dropout = params.dropout
@@ -49,7 +49,7 @@ class Attention(nn.Module):
             (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
             from src.loralib.layers import LoRALinear
             self.q_proj = LoRALinear(
-                params.dim, params.n_heads * self.head_dim, 
+                params.hidden_size, params.n_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -58,7 +58,7 @@ class Attention(nn.Module):
                 merge_weights=False
             )
             self.k_proj = LoRALinear(
-                params.dim, self.n_kv_heads * self.head_dim, 
+                params.hidden_size, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -67,7 +67,7 @@ class Attention(nn.Module):
                 merge_weights=False
             )
             self.v_proj = LoRALinear(
-                params.dim, self.n_kv_heads * self.head_dim, 
+                params.hidden_size, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -79,7 +79,7 @@ class Attention(nn.Module):
             and (params.lora_mudule == 'linear' or params.lora_mudule == 'all'):
             from src.loralib.dora_layers import DoRALinear
             self.q_proj = DoRALinear(
-                params.dim, params.n_heads * self.head_dim, 
+                params.hidden_size, params.n_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -88,7 +88,7 @@ class Attention(nn.Module):
                 merge_weights=False
             )
             self.k_proj = DoRALinear(
-                params.dim, self.n_kv_heads * self.head_dim, 
+                params.hidden_size, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -97,7 +97,7 @@ class Attention(nn.Module):
                 merge_weights=False
             )
             self.v_proj = DoRALinear(
-                params.dim, self.n_kv_heads * self.head_dim, 
+                params.hidden_size, self.n_kv_heads * self.head_dim, 
                 use_bias=params.use_bias,
                 r=params.lora_attn_dim, 
                 lora_alpha=params.lora_attn_alpha, 
@@ -106,9 +106,9 @@ class Attention(nn.Module):
                 merge_weights=False
             )
         else:
-            self.q_proj = nn.Linear(params.dim, params.n_heads * self.head_dim, bias=params.use_bias)
-            self.k_proj = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
-            self.v_proj = nn.Linear(params.dim, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+            self.q_proj = nn.Linear(params.hidden_size, params.n_heads  * self.head_dim, bias=params.use_bias)
+            self.k_proj = nn.Linear(params.hidden_size, self.n_kv_heads * self.head_dim, bias=params.use_bias)
+            self.v_proj = nn.Linear(params.hidden_size, self.n_kv_heads * self.head_dim, bias=params.use_bias)
                 
         if not self.flash_attention:
             # use flash attention or a manual implementation?
@@ -140,7 +140,7 @@ class Attention(nn.Module):
                     base=self.rope_beta,
                 )
             elif self.rope_scaling_type == "clex":
-                from src.models.layers.clex_position_code import CLEXScalingRotaryEmbedding
+                from src.layers.position_code.clex import CLEXScalingRotaryEmbedding
                 self.rotary_emb = CLEXScalingRotaryEmbedding(
                     dim=self.head_dim, 
                     max_position_embeddings=self.max_position_embeddings, 

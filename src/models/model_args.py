@@ -6,28 +6,34 @@ from typing import Optional, Tuple
 
 @dataclass
 class ModelArgs:
-    dim: int = 2048
+    max_seq_len: int = 2048
+    word_embed_proj_dim: int = 1024
+    hidden_size: int = 2048
     n_layers: int = 32
     n_heads: int = 32
     n_kv_heads: Optional[int] = None
     vocab_size: int = -1  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
+    do_layer_norm_before: bool = True,
     norm_eps: float = 1e-5
     dropout: float = 0.0
     use_bias : bool = False
     group_size_ratio : float = 0.25
     use_ssa_min_seq : int = 8192
     dtype : str = 'float16'
-    model_type : str = 'Model'
+    architectures : str = 'JerryForCausalLM'
     act_fn : str = 'silu'  # silu_and_mul/silu/relu/gelu_pytorch_tanh/gelu_new/gelu
     
     flash_attention : bool = False
     use_shift_short_attn : bool = False
 
-    max_seq_len: int = 2048
     rope_scaling_type: str = 'linear'  # linear/dynamic/clex
     rope_beta: float = 10000.0
     rope_scaling_factor: float = 1.0
+
+    pad_token_id: int = 1,
+    bos_token_id: int = 2,
+    eos_token_id: int = 2,
 
     is_train: bool = False
     load_in_lowbit: int = -1
@@ -52,9 +58,12 @@ class ModelArgs:
     cache_start_size : int = 10
     cache_recent_size : int = 1024
 
+
 def get_model_args(opt, train_flag):
     model_args = dict(
-        dim=opt.dim,
+        max_seq_len=opt.max_seq_len,
+        word_embed_proj_dim=opt.word_embed_proj_dim,
+        hidden_size=opt.hidden_size,
         n_layers=opt.n_layers,
         n_heads=opt.n_heads,
         n_kv_heads=opt.n_kv_heads if opt.n_kv_heads > 0 else opt.n_heads,
@@ -63,11 +72,15 @@ def get_model_args(opt, train_flag):
         rope_scaling_factor=opt.rope_scaling_factor,
         rope_scaling_type=opt.rope_scaling_type,
         multiple_of=opt.multiple_of,
-        max_seq_len=opt.max_seq_len,
         dropout=opt.dropout,
+        do_layer_norm_before=opt.do_layer_norm_before,
         use_bias=opt.use_bias,
-        model_type = 'Model',
+        architectures = 'JerryForCausalLM',
         act_fn = opt.act_fn,
+
+        pad_token_id = opt.pad_token_id,
+        bos_token_id = opt.bos_token_id,
+        eos_token_id = opt.eos_token_id,
 
         flash_attention = False,
         use_shift_short_attn=opt.use_shift_short_attn,

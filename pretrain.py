@@ -114,7 +114,7 @@ def pretrain_model(opt):
             print(ds_config)
     
     #init model
-    model=init_model(opt, train_flag=True)
+    model, _ = init_model(opt, train_flag=True)
     if master_process:
         model.print_params()
    
@@ -237,7 +237,7 @@ if __name__=="__main__":
     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
     # -----------------------------------------------------------------------------
 
-    save_name=f'pretrain_layer{opt.n_layers}_seqlen{opt.max_seq_len}_dim{opt.dim}_accum{opt.grad_accum_steps}_h{opt.n_heads}_hkv{opt.n_kv_heads}'
+    save_name=f'pretrain_layer{opt.n_layers}_seqlen{opt.max_seq_len}_dim{opt.hidden_size}_accum{opt.grad_accum_steps}_h{opt.n_heads}_hkv{opt.n_kv_heads}'
     save_dir =os.path.join(opt.out_dir , save_name)
     os.makedirs(opt.out_dir, exist_ok=True)
     if not os.path.exists(save_dir): 

@@ -125,7 +125,7 @@ def ft_model(opt, model_name_path):
             print(ds_config)
 
     #init model
-    model=init_model(opt, train_flag=True)
+    model, tokenizer = init_model(opt, train_flag=True)
     model_path, state_dict, lora_path, lora_state_dict = read_ckpt(model_name_path)
     load_weight(model, state_dict)
     model.to(opt.device)
@@ -176,9 +176,6 @@ def ft_model(opt, model_name_path):
         else:
             model_opt=model
             
-    #-----init dataloader------
-    tokenizer = ChatGLMTokenizer(vocab_file=opt.vocab_file)
-
     print(f"====================prepear dataset====================")
 
     if opt.rope_scaling_factor > 1.0:
@@ -271,7 +268,7 @@ if __name__=="__main__":
         train_params['use_deepspeed'] = opt.use_deepspeed
         train_config['train_params'] = train_params
     
-    set_fine_tuning_paras_to_config(opt, train_config)
+    set_fine_tuning_paras_to_config(opt, model_config, train_config)
 
     if not os.path.exists(save_dir): os.makedirs(save_dir)
     

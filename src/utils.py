@@ -26,7 +26,7 @@ def read_ckpt(model_path_name, lora_path=''):
     lora_state_dict = None
     
     if lora_path=='':
-        if model_path_name.endswith('.pth'):
+        if model_path_name.endswith('.pth') or model_path_name.endswith('.bin'):
             model_path = model_path_name
         elif model_path_name.endswith('.lora'):
             lora_path = model_path_name
@@ -62,24 +62,28 @@ def find_layers(module, layers=[nn.Conv2d, nn.Linear], name=''):
 
 def load_weight(model, state_dict, lora_state_dict=None, merge_lora_on_load=False, strict=True):
     # 从预训练权重中更新模型参数
-    if model.model.params.ft_type == 'lora' or model.model.params.lora_path != '':
-        model_dict = model.state_dict()
-        for name, param in state_dict.items():
-            if model_dict[name].shape == param.shape:
-                model_dict[name].copy_(param)
-            elif model_dict[name].shape == param.T.shape:
-                model_dict[name].copy_(param.T)
-            else:
-                print('load_weight shape error.')
-                return
-
-        if lora_state_dict is not None:
-            if merge_lora_on_load:
-                from src.loralib.utils import merge_lora_on_load_func
-                merge_lora_on_load_func(model, lora_state_dict)
-            else:
-                for name, param in lora_state_dict.items():
+    from src.models.Jerry import JerryForCausalLM
+    if isinstance(model, JerryForCausalLM):
+        if model.model.params.ft_type == 'lora' or model.model.params.lora_path != '':
+            model_dict = model.state_dict()
+            for name, param in state_dict.items():
+                if model_dict[name].shape == param.shape:
                     model_dict[name].copy_(param)
+                elif model_dict[name].shape == param.T.shape:
+                    model_dict[name].copy_(param.T)
+                else:
+                    print('load_weight shape error.')
+                    return
+
+            if lora_state_dict is not None:
+                if merge_lora_on_load:
+                    from src.loralib.utils import merge_lora_on_load_func
+                    merge_lora_on_load_func(model, lora_state_dict)
+                else:
+                    for name, param in lora_state_dict.items():
+                        model_dict[name].copy_(param)
+        else:
+            model.load_state_dict(state_dict, strict)
     else:
         model.load_state_dict(state_dict, strict)
 

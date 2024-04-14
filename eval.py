@@ -141,7 +141,7 @@ def eval(model_path_name,opt,logger):
         return
     
     opt.lora_path = lora_path
-    model=init_model(opt)
+    model, tokenizer = init_model(opt)
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -154,9 +154,6 @@ def eval(model_path_name,opt,logger):
     if opt.compile:
         print("Compiling the model...")
         model = torch.compile(model) # requires PyTorch 2.0 (optional)
-
-    # load the tokenizer
-    tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
 
     eval_medical(model, model_path_name, tokenizer, opt, ctx, logger)
     eval_ceval(model, model_path_name, tokenizer, opt, logger)

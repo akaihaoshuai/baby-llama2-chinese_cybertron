@@ -27,7 +27,7 @@ def quant_sequential(model, dataloader, dev):
 
     dtype = next(iter(model.model.parameters())).dtype
     inps = torch.zeros(  # [128, 2048, 768]
-        (args.nsamples, model.model.max_seq_len, model.model.dim), dtype=dtype, device=dev
+        (args.nsamples, model.model.max_seq_len, model.model.hidden_size), dtype=dtype, device=dev
     )
     cache = {'i': 0, 'position_ids': None, 'attention_mask': None}
 
@@ -162,7 +162,7 @@ def model_eval(model, testenc, dev):
 
     dtype = next(iter(model.parameters())).dtype
     inps = torch.zeros(
-        (nsamples, model.model.max_seq_len, model.model.dim), dtype=dtype, device=dev
+        (nsamples, model.model.max_seq_len, model.model.hidden_size), dtype=dtype, device=dev
     )
     cache = {'i': 0, 'position_ids': None, 'attention_mask': None}
 
@@ -261,7 +261,7 @@ def load_quant_model(checkpoint, wbits, groupsize, opt, fused_mlp=True, eval=Tru
     torch.set_default_dtype(torch.half)
     opt.load_in_lowbit = wbits
     opt.load_in_lowbit_groupsize = groupsize
-    model = init_model(opt)
+    model, _ = init_model(opt)
     torch.set_default_dtype(torch.float)
     model = model.eval()
     layers = find_layers(model)
@@ -383,7 +383,7 @@ if __name__ == '__main__':
     else:
         opt.model_path = opt.model
         opt.init_from = "resume"
-        model = init_model(opt)
+        model, _ = init_model(opt)
         model.eval()
 
     from src.data.datautils import get_loaders

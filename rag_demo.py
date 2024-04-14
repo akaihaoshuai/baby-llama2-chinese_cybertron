@@ -8,7 +8,7 @@ from src.share import *
 
 def get_model(opt):
     model_path, state_dict, lora_path, lora_state_dict = read_ckpt(opt.model_path)
-    model = init_model(opt)
+    model, tokenizer = init_model(opt)
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
         if k.startswith(unwanted_prefix):
@@ -20,9 +20,6 @@ def get_model(opt):
     if opt.compile:
         print("Compiling the model...")
         model = torch.compile(model) # requires PyTorch 2.0 (optional)
-
-        # load the tokenizer
-    tokenizer=ChatGLMTokenizer(vocab_file=opt.vocab_file)
 
     return model, tokenizer
 

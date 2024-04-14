@@ -6,7 +6,7 @@ from torch.distributed import init_process_group
 import logging
 import inspect
 import numpy as np
-from src.models.model_loader import _get_model_architecture
+from src.models.model_loader import _get_model_architecture, _get_token_architecture
 from src.models.model_args import *
 
 def get_logger(filename, verbosity=1, name=None):
@@ -111,10 +111,21 @@ def configure_optimizers(model, weight_decay, learning_rate,
 
 def init_model(opt, train_flag=False):
     # model init
+    if isinstance(opt.architectures, list):
+        opt.architectures = opt.architectures[0]
+    model_architecture = _get_model_architecture(opt.architectures)
+    token_architecture, is_chatglm = _get_token_architecture(opt.architectures)
+
+    # load the tokenizer
+    if is_chatglm:
+        tokenizer=token_architecture(vocab_file=opt.vocab_file)
+    else:
+        tokenizer=token_architecture.from_pretrained(os.path.dirname(opt.model_path))
+
     if opt.init_from == "scratch":
         # init a new model from scratch
         print("Initializing a new model from scratch")
-        model = _get_model_architecture(opt.model_type)(get_model_args(opt, train_flag=train_flag))
+        model = model_architecture(get_model_args(opt, train_flag=train_flag))
     elif opt.init_from == "resume":
         print(f"Resuming training from {opt.model_path}")
         # resume training from a checkpoint.
@@ -124,7 +135,7 @@ def init_model(opt, train_flag=False):
             ckpt_path = opt.model_path
         state_dict = torch.load(ckpt_path, map_location = opt.device)
         # create the model
-        model = _get_model_architecture(opt.model_type)(get_model_args(opt, train_flag=train_flag))
+        model = model_architecture(get_model_args(opt, train_flag=train_flag))
         # fix the keys of the state dictionary :(
         # honestly no idea how checkpoints sometimes get this prefix, have to debug more
         unwanted_prefix = "_orig_mod."
@@ -132,7 +143,7 @@ def init_model(opt, train_flag=False):
             if k.startswith(unwanted_prefix):
                 state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
         model.load_state_dict(state_dict)
-    return model
+    return model, tokenizer
 
 
 def init_ddp(ddp, opt):

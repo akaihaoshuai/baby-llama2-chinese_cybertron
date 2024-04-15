@@ -6,6 +6,8 @@
 
 
 ## 更新记录
+>2024.03.20：增加RLHF代码，可以运行，效果未验证。[https://zhuanlan.zhihu.com/p/686217468]
+
 >2024.03.20：支持GPTQ量化，可以运行。增加llm.int8/awq/onebit量化代码，但代码未测试，[https://zhuanlan.zhihu.com/p/686161543]
 
 >2024.03.10：增加YaRN/CLEX等位置编码，解决kv_cache的bug。[https://zhuanlan.zhihu.com/p/684907262]

@@ -14,9 +14,6 @@ def get_parser_args(parser=None):
     parser.add_argument("--train_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--valid_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
     parser.add_argument("--test_data_path", type=list, default=['./data/pretrain_data.bin'], help="path to config")
-    parser.add_argument("--sft_data_path", type=str, default='./data/sft_data.csv', help="path to config")
-    parser.add_argument("--sft_long_data_path_train", type=str, default='./data/sft_data.csv', help="path to config")
-    parser.add_argument("--sft_long_data_path_val", type=str, default='./data/sft_data.csv', help="path to config")
     parser.add_argument("--out_dir", type=str, default='out', help="path to config")
     parser.add_argument("--model_path", type=str, default='best.pth', help="path to config")
     parser.add_argument("--lora_path", type=str, default='', help="")
@@ -59,6 +56,9 @@ def get_parser_args(parser=None):
     parser.add_argument("--neftune_noise_alpha", type=float, default=0.1)
     
     # finetune
+    parser.add_argument("--sft_data_path", type=str, default='./data/sft_data.csv', help="path to config")
+    parser.add_argument("--sft_long_data_path_train", type=str, default='./data/sft_data.csv', help="path to config")
+    parser.add_argument("--sft_long_data_path_val", type=str, default='./data/sft_data.csv', help="path to config")
     parser.add_argument('--ft_type', type=str, default="full_ft", choices=['full_ft', 'lora', 'dora'])
     parser.add_argument('--lora_mudule', type=str, default="all", choices=['linear', 'embedding', 'all'])
     parser.add_argument("--lora_attn_dim", type=int, default=8)
@@ -79,7 +79,7 @@ def get_parser_args(parser=None):
     parser.add_argument("--always_save_ckpt", type=bool, default=True)
     parser.add_argument("--init_from", type=str, default='scratch', help="path to config")
     parser.add_argument("--grad_accum_steps", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--learning_rate", type=float, default=3e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-1)
     parser.add_argument("--beta1", type=float, default=0.9)
@@ -100,13 +100,46 @@ def get_parser_args(parser=None):
     parser.add_argument("--compile", type=bool, default=False)
     parser.add_argument("--local_rank", type=int, default=0)
 
-    #eval
+    # eval
     parser.add_argument("--max_new_tokens", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top_k", type=int, default=30)
     parser.add_argument("--top_p", type=float, default=0.4)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument("--shot", type=int, default=0, help='zero shot')
+
+
+    # ppo
+    parser.add_argument("--rw_data_path", type=str, default='./data/hh-rlhf/helpful-base', help="path to config")
+    parser.add_argument("--ppo_data_path", type=str, default='./data/ppo_data', help="path to config")
+    parser.add_argument("--reward_lm_loss_factor", type=float, default=0.0)
+    parser.add_argument("--validation_metric", type=str, default='loss')
+    parser.add_argument("--eps", type=float, default=0.000001)
+    parser.add_argument("--num_prefetch", type=int, default=32)
+    parser.add_argument("--num_workers", type=int, default=1)
+    parser.add_argument('--num_rollouts', type=int, default=64, help='nums of samples in current replay buffer')
+    parser.add_argument('--critic_lr', type=float, default=15e-7, help='learning rate of critic model')
+    parser.add_argument('--reward_clip', type=float, default=10., help='reward clip')
+    parser.add_argument('--pg_clip', type=float, default=0.2, help='pg loss clip')
+    parser.add_argument('--value_clip', type=float, default=0.2, help='value clip for critic model')
+    parser.add_argument('--entropy_clip', type=float, default=35., help='entropy loss clip')
+    parser.add_argument('--advantage_clip', type=float, default=0.5, help='clip advantage')
+    parser.add_argument('--kl_penalty_weight', type=float, default=0.02, help='kl penalty')
+    parser.add_argument('--vf_loss_weight', type=float, default=1., help='vf loss weight')
+    parser.add_argument('--entropy_loss_weight', type=float, default=0., help='entropy loss weight')
+    parser.add_argument('--ppo_pretrain_loss_weight', type=float, default=0., help='add pretrain loss in PPO training: ppo-rtx')
+
+    # Trick and method options for PPO
+    parser.add_argument('--use_reward_clip', action='store_true', help='use reward clip')
+    parser.add_argument('--use_reward_scaling', action='store_true', help='use reward scaling')
+    parser.add_argument('--use_reward_norm', action='store_true', help='user reward norm')
+    parser.add_argument('--use_critic_loss_clip', action='store_true', help='use critic loss clip')
+    parser.add_argument('--use_policy_loss_clip', action='store_true', help='use policy loss clip')
+    parser.add_argument('--use_advantage_norm', action='store_true', help='use advantage norm')
+    parser.add_argument('--use_advantage_clip', action='store_true', help='use advantage clip')
+    parser.add_argument('--use_ppo_pretrain_loss', action='store_true', help='use ppo pretrain loss')
+    parser.add_argument('--use_entropy_loss', action='store_true', help='use ppo entropy loss')
+
 
     # demo
     parser.add_argument("--host", type=str, default="localhost")
@@ -240,6 +273,37 @@ def parser_train_config(opt):
         opt.top_p = eval_params_yaml.get('top_p', opt.top_p)
         opt.seed = eval_params_yaml.get('seed', opt.seed)
         opt.shot = eval_params_yaml.get('shot', opt.shot)
+
+    ppo_params_yaml = train_config.get('ppo_params')
+    if None != ppo_params_yaml:
+        opt.rw_data_path = ppo_params_yaml.get('rw_data_path', opt.rw_data_path)
+        opt.ppo_data_path = ppo_params_yaml.get('ppo_data_path', opt.ppo_data_path)
+        opt.reward_lm_loss_factor = ppo_params_yaml.get('reward_lm_loss_factor', opt.reward_lm_loss_factor)
+        opt.validation_metric = ppo_params_yaml.get('validation_metric', opt.validation_metric)
+        opt.eps = ppo_params_yaml.get('eps', opt.eps)
+        opt.num_prefetch = ppo_params_yaml.get('num_prefetch', opt.num_prefetch)
+        opt.num_workers = ppo_params_yaml.get('num_workers', opt.num_workers)
+        opt.num_rollouts = ppo_params_yaml.get('num_rollouts', opt.num_rollouts)
+        opt.critic_lr = ppo_params_yaml.get('critic_lr', opt.critic_lr)
+        opt.reward_clip = ppo_params_yaml.get('reward_clip', opt.reward_clip)
+        opt.pg_clip = ppo_params_yaml.get('pg_clip', opt.pg_clip)
+        opt.value_clip = ppo_params_yaml.get('value_clip', opt.value_clip)
+        opt.entropy_clip = ppo_params_yaml.get('entropy_clip', opt.entropy_clip)
+        opt.advantage_clip = ppo_params_yaml.get('advantage_clip', opt.advantage_clip)
+        opt.kl_penalty_weight = ppo_params_yaml.get('kl_penalty_weight', opt.kl_penalty_weight)
+        opt.vf_loss_weight = ppo_params_yaml.get('vf_loss_weight', opt.vf_loss_weight)
+        opt.entropy_loss_weight = ppo_params_yaml.get('entropy_loss_weight', opt.entropy_loss_weight)
+        opt.ppo_pretrain_loss_weight = ppo_params_yaml.get('ppo_pretrain_loss_weight', opt.ppo_pretrain_loss_weight)
+        opt.use_entropy_loss = ppo_params_yaml.get('use_entropy_loss', opt.use_entropy_loss)
+        opt.use_reward_clip = ppo_params_yaml.get('use_reward_clip', opt.use_reward_clip)
+        opt.use_reward_scaling = ppo_params_yaml.get('use_reward_scaling', opt.use_reward_scaling)
+        opt.use_reward_norm = ppo_params_yaml.get('use_reward_norm', opt.use_reward_norm)
+        opt.use_advantage_norm = ppo_params_yaml.get('use_advantage_norm', opt.use_advantage_norm)
+        opt.use_advantage_clip = ppo_params_yaml.get('use_advantage_clip', opt.use_advantage_clip)
+        opt.use_critic_loss_clip = ppo_params_yaml.get('use_critic_loss_clip', opt.use_critic_loss_clip)
+        opt.use_policy_loss_clip = ppo_params_yaml.get('use_policy_loss_clip', opt.use_policy_loss_clip)
+        opt.use_ppo_pretrain_loss = ppo_params_yaml.get('use_ppo_pretrain_loss', opt.use_ppo_pretrain_loss)
+
 
     return opt, train_config
 

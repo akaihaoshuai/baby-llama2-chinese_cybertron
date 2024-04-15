@@ -40,3 +40,6 @@ fi
 # 推理
 # CUDA_VISIBLE_DEVICES=0 python web_inference.py --model ./out/pretrain.ckpt
 # CUDA_VISIBLE_DEVICES=0 python inference.py --model ./out/pretrain.ckpt
+
+# RLHF
+# CUDA_VISIBLE_DEVICES=0 rlhf_train.py

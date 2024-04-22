@@ -5,7 +5,7 @@ import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from src.data.dataset_pretrain import PretrainDataset
+from src.data_prepare.dataset_pretrain import PretrainDataset
 from numpy import *
 from src.utils import *
 from src.share import *

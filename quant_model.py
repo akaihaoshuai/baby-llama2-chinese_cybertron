@@ -342,7 +342,7 @@ def benchmark(model, input_ids, device, check=False):
 
 if __name__ == '__main__':
     import argparse
-    from src.data.datautils import *
+    from src.data_prepare.datautils import *
 
     parser = argparse.ArgumentParser()
 
@@ -386,7 +386,7 @@ if __name__ == '__main__':
         model, _ = init_model(opt)
         model.eval()
 
-    from src.data.datautils import get_loaders
+    from src.data_prepare.datautils import get_loaders
     print('load dataset......')
     dataloader, testloader = get_loaders(
         args.dataset, nsamples=args.nsamples, vocab_file=opt.vocab_file, seqlen=model.model.max_seq_len

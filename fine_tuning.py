@@ -6,8 +6,8 @@ import torch
 from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import pandas as pd
-from src.data.dataset_sft import SFTDataset
-from src.data.dataset_pretrain import PretrainDataset
+from src.data_prepare.dataset_sft import SFTDataset
+from src.data_prepare.dataset_pretrain import PretrainDataset
 import torch.nn.functional as F
 from tokenizer_model import ChatGLMTokenizer
 from src.share import *

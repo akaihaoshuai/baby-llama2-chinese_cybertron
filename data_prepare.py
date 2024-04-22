@@ -3,7 +3,7 @@ import glob
 import numpy as np
 from tokenizer_model import *
 import os
-from src.data.data_process import *
+from src.data_prepare.data_process import *
 
 BATCH_SIZE = 500000000
 tokenizer = ChatGLMTokenizer(vocab_file='./tokenizer_model/chatglm_tokenizer/tokenizer.model')
@@ -72,7 +72,7 @@ def process_data_v1():
     # process_wiki_zh_clean(tokenizer, save_all_text)
     #
     # print('process_baidu.')
-    # process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
+    process_baidu('./data/563w_baidubaike.json', tokenizer, BATCH_SIZE, save_all_text)
     #
     # # 这个数据集很大
     # print('process_mnbvc.')
@@ -91,7 +91,7 @@ def process_data_v1():
 
     # 代码
     print('process github_code.')
-    process_github_code(tokenizer, BATCH_SIZE, save_all_text)
+    # process_github_code(tokenizer, BATCH_SIZE, save_all_text)
     
 
     print('process_medical: medical_book_zh')

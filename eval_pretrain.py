@@ -22,7 +22,7 @@ start = "" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:p
 num_samples = 1 # number of samples to draw
 max_new_tokens = 100 # number of tokens generated in each sample
 temperature = 1.0 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-top_k = 100 # retain only the top_k most likely tokens, clamp others to have 0 probability
+top_k = 30 # retain only the top_k most likely tokens, clamp others to have 0 probability
 seed = 1337
 device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 #dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -30,15 +30,15 @@ dtype = "float32"
 compile = False # use PyTorch 2.0 to compile the model to be faster
 #exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
-max_seq_len = 512
-dim = 512
-n_layers = 8
-n_heads = 8
-
-# max_seq_len = 1024
-# dim = 1024
-# n_layers = 12
+# max_seq_len = 512
+# dim = 512
+# n_layers = 8
 # n_heads = 8
+
+max_seq_len = 1024
+dim = 1024
+n_layers = 12
+n_heads = 8
 multiple_of = 32
 dropout = 0.0 
 model_args = dict(
@@ -60,7 +60,7 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.cuda.amp.autocast()
 
 # init from a model saved in a specific directory
-ckpt_path = 'out/sft_Llama2-Chinese-92M-v2/epoch_4.pth'
+ckpt_path = 'out/Llama2-Chinese-218M-v1/epoch_0.pth'
 state_dict = torch.load(ckpt_path, map_location=device)
 gptconf = ModelArgs(**model_args)
 model = Transformer(gptconf)
@@ -84,23 +84,19 @@ tokenizer=ChatGLMTokenizer(vocab_file='./chatglm_tokenizer/tokenizer.model')
 #     for line in f:
 #         data.append(json.loads(line))
 
-#如果有标准答案，可以填到target里面，打开最后几行的注释，计算bleu分数。
-#如果随便测试测试，那就只填你希望问的问题到question里面就可以。
 data = [
-    {"question": "最近我在办公室坐久了会感到头晕，请问这是什么原因?有什么缓解办法吗？", "target": ""},
-    {"question": "前列腺囊肿的症状是什么？", "target": ""},
-    {"question": "请问，世界上最大的动物是什么？", "target": ""},
+    {"question": "床前明月光，疑是地上霜。举头望明月，"},
+    {"question": "请你讲一个童话故事："},
+    {"question": "《小王子》是一本畅销童话书，它讲述了："},
 ]
 
 ans_lst=[]
 target_lst=[]
-for p in data:
+for p in data[:100]:
     # run generation
     prompt=p['question']
-    x=tokenizer.encode(prompt,add_special_tokens=False)+[tokenizer.special_tokens['<bos>']]
+    x=tokenizer.encode(prompt,add_special_tokens=False)
     x = (torch.tensor(x, dtype=torch.long, device=device)[None, ...])
-    target = p['target']
-    target_lst.append(target)
     with torch.no_grad():
         with ctx:
             y = model.generate(x, 2, max_new_tokens, temperature=temperature, top_k=top_k)

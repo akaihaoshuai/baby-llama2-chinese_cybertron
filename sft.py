@@ -9,12 +9,12 @@ import torch
 from model import Transformer, ModelArgs
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from dataset import PretrainDataset
+import pandas as pd
+from dataset_sft import SFTDataset
 import logging
-
-#To run with DDP on 4 gpus on 1 node, example:
-# torchrun --standalone --nproc_per_node=4 pretrain.py OR python -m torch.distributed.launch --nproc_per_node=4 pretrain.py
+import json
+import torch.nn.functional as F
+from chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
         
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -45,12 +45,13 @@ def get_lr(it):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
-
+#------------------------------------------------------------------------------
 def train_epoch(epoch):
     start_time=time.time()
-    for step, (X, Y) in enumerate(train_loader):
+    for step, (X, Y,loss_mask) in enumerate(train_loader):
         X=X.to(device)
         Y=Y.to(device)
+        loss_mask=loss_mask.to(device)
         lr = get_lr(epoch*iter_per_epoch+step) if decay_lr else learning_rate
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
@@ -64,22 +65,24 @@ def train_epoch(epoch):
             model.require_backward_grad_sync = 0 == gradient_accumulation_steps - 1
         with ctx:
             logits = model(X, Y)
-            loss = raw_model.last_loss
-            loss = loss / gradient_accumulation_steps
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
+            loss_mask = loss_mask.view(-1)
+            loss = torch.sum(loss*loss_mask)/loss_mask.sum()
+            #loss = raw_model.last_loss
+            #loss = loss / gradient_accumulation_steps
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
         #
-        if (step + 1) % gradient_accumulation_steps == 0:
-            # clip the gradient
-            if grad_clip != 0.0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            # step the optimizer and scaler if training in fp16
-            scaler.step(optimizer)
-            scaler.update()
-            # flush the gradients as soon as we can, no need for this memory anymore
-            optimizer.zero_grad(set_to_none=True)
+        # clip the gradient
+        if grad_clip != 0.0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        # step the optimizer and scaler if training in fp16
+        scaler.step(optimizer)
+        scaler.update()
+        # flush the gradients as soon as we can, no need for this memory anymore
+        optimizer.zero_grad(set_to_none=True)
         #打印日志
         if step % log_interval == 0:
             spend_time=time.time()-start_time
@@ -92,39 +95,28 @@ def train_epoch(epoch):
                         loss.item(), 
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
-        #
-        if step % save_interval == 0:
-            if ddp:
-                if torch.distributed.get_rank() == 0:
-                    model.eval()
-                    torch.save(model.module.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
-                    model.train()
-            else:
-                model.eval()
-                torch.save(model.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
-                model.train()
-
-#@torch.no_grad()
-# def valid_epoch(epoch):
-#     global best_val_loss
-#     losses = []
-#     model.eval()
-#     for _, (X, Y) in enumerate(val_loader):
-#         X=X.to(device)
-#         Y=Y.to(device)
-#         with ctx:
-#             logits, loss = model(X, Y)
-#         losses.append(loss.item())
-#     model.train()
-#     val_loss=np.mean(losses)
-#     #
-#     logger.info('valid loss = {:.4f}'.format(val_loss))
-#     if val_loss < best_val_loss:
-#         best_val_loss = val_loss
-#         logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
-#         torch.save(raw_model.state_dict(),'{}/best.pth'.format(save_dir))
-#     #
-#     return val_loss
+#------------------
+@torch.no_grad()
+def valid_epoch(epoch):
+    global best_val_loss
+    losses = []
+    model.eval()
+    for _, (X, Y) in enumerate(val_loader):
+        X=X.to(device)
+        Y=Y.to(device)
+        with ctx:
+            logits, loss = model(X, Y)
+        losses.append(loss.item())
+    model.train()
+    val_loss=np.mean(losses)
+    #
+    logger.info('valid loss = {:.4f}'.format(val_loss))
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        logger.info('best val_loss: {} best_epoch: {} '.format(best_val_loss,epoch))
+        torch.save(raw_model.state_dict(),'{}/best.pth'.format(save_dir))
+    #
+    return val_loss
 
 def init_model():
     # model init
@@ -134,7 +126,7 @@ def init_model():
         n_layers=n_layers,
         n_heads=n_heads,
         n_kv_heads=n_heads,
-        vocab_size=64793,
+        vocab_size=64793,#64793,
         multiple_of=multiple_of,
         max_seq_len=max_seq_len,
         dropout=dropout,
@@ -171,18 +163,17 @@ def init_model():
 # I/O
 if __name__=="__main__":
     out_dir = 'out'
-    max_epoch = 1
+    max_epoch = 2
     eval_interval = 1
-    log_interval = 100
-    save_interval = 10000
+    log_interval = 50
     eval_iters = 200
     eval_only = False # if True, script exits right after the first eval
     always_save_checkpoint = True # if True, always save a checkpoint after each eval
     init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
     #
     gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-    batch_size = 32  # if gradient_accumulation_steps > 1, this is the micro-batch size
-    # model 根据需要更改 
+    batch_size = 32 # if gradient_accumulation_steps > 1, this is the micro-batch size
+    # model
     max_seq_len = 512
     dim = 512
     n_layers = 8
@@ -191,16 +182,16 @@ if __name__=="__main__":
     dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
     bias = False # do we use bias inside LayerNorm and Linear layers?
     # adamw optimizer
-    learning_rate = 3e-4 # max learning rate
-    weight_decay = 1e-1
+    learning_rate = 2e-5 # max learning rate
+    weight_decay = 1e-4
     beta1 = 0.9
     beta2 = 0.95
     grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
     # learning rate decay settings
     decay_lr = True # whether to decay the learning rate
     warmup_iters = 1000 # how many steps to warm up for
-    lr_decay_iters = 80000 # should be ~= max_iters per Chinchilla
-    min_lr = 1e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+    lr_decay_iters = 50000 # should be ~= max_iters per Chinchilla
+    min_lr = 1e-6 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
     # DDP settings
     backend = 'nccl' # 'nccl', 'gloo', etc.
     # system
@@ -217,21 +208,14 @@ if __name__=="__main__":
     # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
     # -----------------------------------------------------------------------------
 
-    save_dir =os.path.join(out_dir , 'pretrain')
+    save_dir =os.path.join(out_dir , 'sft')
     if not os.path.exists(save_dir): os.makedirs(save_dir)
     logger = get_logger(os.path.join(save_dir,'log.log'))
     # various inits, derived attributes, I/O setup
    # various inits, derived attributes, I/O setup
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    
     if ddp:
-        # Check if the operating system is Windows
-        if os.name == 'nt':
-            # Diff between backends: https://pytorch.org/docs/stable/distributed.html
-            init_process_group(backend="gloo")
-        else:
-            # If the operating system is Linux based, os.name == 'posix'
-            init_process_group(backend="nccl")
+        init_process_group(backend="nccl")
         ddp_rank = int(os.environ["RANK"])
         ddp_local_rank = int(os.environ["LOCAL_RANK"])
         ddp_world_size = int(os.environ["WORLD_SIZE"])
@@ -268,26 +252,32 @@ if __name__=="__main__":
     )
     #
     best_val_loss = 1e9
-    #
+    
     #-----init dataloader------
-    data_path_list=[
-        './data/pretrain_data.bin'
-        #'./data/baidubaike_563w.bin',
-        #'./data/medical_book.bin',
-        # './data/medical_encyclopedia.bin',
-        # './data/medical_qa.bin',
-        # './data/wiki.bin'
-    ]
-    train_ds = PretrainDataset(data_path_list, max_length=max_seq_len,memmap=True)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
+    df=pd.read_csv('./sft_data/sft_data.csv')
+    # input=[]
+    # target=[]
+    # with open('../track1/train_valid.json','r') as f:
+    #     data=json.load(f)
+    # #
+    # for l in data:
+    #     input.append(l['question'])
+    #     target.append(l['answer'])
+    # df = pd.DataFrame()
+    # df['prompt']=input
+    # df['answer']=target
+    # df=pd.concat((df_sft,df[100:])).reset_index(drop=True)
+    df=df.sample(frac=1.0)
+    print(df)
+    tokenizer=ChatGLMTokenizer(vocab_file='./chatglm_tokenizer/tokenizer.model')
+    train_ds = SFTDataset(df,tokenizer, max_length=512)
     train_loader = torch.utils.data.DataLoader(
         train_ds,
         batch_size=batch_size,
         pin_memory=False,
         drop_last=False,
         shuffle=False,        
-        num_workers=0 if os.name == 'nt' else 4,
-        sampler=train_sampler
+        num_workers=0,
     )
     # val_ds = PretrainDataset(data_path_list, max_length=256)
     # val_loader = torch.utils.data.DataLoader(
@@ -300,11 +290,14 @@ if __name__=="__main__":
     # )
     #init model
     model=init_model()
+    model.load_state_dict(torch.load('./out/baike_pretrain/epoch_0.pth'))
     model.to(device)
     # initialize a GradScaler. If enabled=False scaler is a no-op
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
     # optimizer
     optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+    #
+    iter_per_epoch=len(train_loader)
     # compile the model
     if compile:
         print("compiling the model... (takes a ~minute)")
@@ -317,15 +310,14 @@ if __name__=="__main__":
         prefix = "_orig_mod." if compile else ""
         model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
         model = DDP(model, device_ids=[ddp_local_rank])
-        #
+    #
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     # training loop
-    iter_per_epoch=len(train_loader)
     for epoch in range(max_epoch):
         train_epoch(epoch)
         #val_loss=valid_epoch(epoch)
         if ddp:
-            if torch.distributed.get_rank() == 0:  #一般用0，当然，可以选任意的rank保存。
+            if torch.distributed.get_rank() == 0:
                 torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
         else:
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))

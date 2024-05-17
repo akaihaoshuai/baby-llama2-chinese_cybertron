@@ -6,32 +6,17 @@ import pickle
 from contextlib import nullcontext
 import numpy as np
 import torch
-from model import Transformer, ModelArgs
+from src.model import Transformer, ModelArgs
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from dataset import PretrainDataset
-import logging
+from src.utils import get_logger
 
 #To run with DDP on 4 gpus on 1 node, example:
 # torchrun --standalone --nproc_per_node=4 pretrain.py OR python -m torch.distributed.launch --nproc_per_node=4 pretrain.py
-        
-def get_logger(filename, verbosity=1, name=None):
-    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
-    formatter = logging.Formatter(
-        "[%(asctime)s][%(filename)s][%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(name)
-    logger.setLevel(level_dict[verbosity])
 
-    fh = logging.FileHandler(filename, "w")
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logger.addHandler(sh)
-    return logger
 # -----------------------------------------------------------------------------
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
@@ -181,11 +166,11 @@ if __name__=="__main__":
     init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
     #
     gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-    batch_size = 32  # if gradient_accumulation_steps > 1, this is the micro-batch size
+    batch_size = 16  # if gradient_accumulation_steps > 1, this is the micro-batch size
     # model 根据需要更改 
-    max_seq_len = 512
-    dim = 512
-    n_layers = 8
+    max_seq_len = 256
+    dim = 256
+    n_layers = 6
     n_heads = 8
     multiple_of = 32
     dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
@@ -272,14 +257,14 @@ if __name__=="__main__":
     #-----init dataloader------
     data_path_list=[
         './data/pretrain_data.bin'
-        #'./data/baidubaike_563w.bin',
-        #'./data/medical_book.bin',
-        # './data/medical_encyclopedia.bin',
-        # './data/medical_qa.bin',
-        # './data/wiki.bin'
     ]
     train_ds = PretrainDataset(data_path_list, max_length=max_seq_len,memmap=True)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
+
+    if ddp:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
+    else:
+        train_sampler = None
+    
     train_loader = torch.utils.data.DataLoader(
         train_ds,
         batch_size=batch_size,

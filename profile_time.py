@@ -18,7 +18,7 @@ def draw_plot(x, y, png_path):
     plt.show()
 
 
-def profile_time(attention, batch_size, seq_len, hidden_size, n_heads):
+def profile_time(attention, batch_size, seq_len, hidden_size, n_heads, number):
     x = torch.randn(batch_size, seq_len, hidden_size)
     freqs_cos = torch.randn(seq_len, (hidden_size // n_heads)//2)
     freqs_sin = torch.randn(seq_len, (hidden_size // n_heads)//2)
@@ -26,7 +26,6 @@ def profile_time(attention, batch_size, seq_len, hidden_size, n_heads):
     # 预热
     output = attention(x, freqs_cos, freqs_sin)
 
-    number = 20
     t1 = benchmark.Timer(
         stmt="attention(x, freqs_cos, freqs_sin)",
         setup="x = torch.randn(batch_size, seq_len, hidden_size); \
@@ -48,6 +47,7 @@ attention = model.layers[0].attention
 seq_len = model.params.max_seq_len
 hidden_size = model.params.dim
 n_heads = model.params.n_heads
+number = 20
 
 para_num = sum(p.numel() for p in attention.parameters())
 print(f"AttentionModule: {para_num/1048576:.3f} M.")
@@ -59,7 +59,7 @@ with torch.no_grad():
     time_list = []
     for batch_size in batch_size_list:
         print(f'batch_size: {batch_size}.')
-        mean_time = profile_time(attention, batch_size, seq_len, hidden_size, n_heads)
+        mean_time = profile_time(attention, batch_size, seq_len, hidden_size, n_heads, number)
         time_list.append(mean_time)
         print(f"Attention layer execution time: {mean_time:.6f} seconds for {number} times")
     draw_plot(batch_size_list, time_list, 'doc/profile/bs_time_profile')
@@ -71,7 +71,7 @@ with torch.no_grad():
     time_list = []
     for seq_len in seq_len_list:
         print(f'seq_len: {seq_len}.')
-        mean_time = profile_time(attention, batch_size, seq_len, hidden_size, n_heads)
+        mean_time = profile_time(attention, batch_size, seq_len, hidden_size, n_heads, number)
         time_list.append(mean_time)
         print(f"Attention layer execution time: {mean_time:.6f} seconds for {number} times")
     draw_plot(seq_len_list, time_list, 'doc/profile/seqlen_time_profile')

@@ -5,9 +5,8 @@ import os
 import json
 from contextlib import nullcontext
 import torch
-from model import ModelArgs, Transformer
-from chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
-import numpy as np
+from src.model import ModelArgs, Transformer
+from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
 
 # def compute_bleu(labels, preds, weights=None):
 #     from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -30,17 +29,18 @@ dtype = "float32"
 compile = False # use PyTorch 2.0 to compile the model to be faster
 #exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
-max_seq_len = 512
+max_seq_len = 256
 dim = 512
-n_layers = 8
+n_layers = 10
 n_heads = 8
+multiple_of = 32
+dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
+bias = False # do we use bias inside LayerNorm and Linear layers?
 
 # max_seq_len = 1024
 # dim = 1024
 # n_layers = 12
 # n_heads = 8
-multiple_of = 32
-dropout = 0.0 
 model_args = dict(
         dim=dim,
         n_layers=n_layers,
@@ -60,7 +60,7 @@ ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torc
 ctx = nullcontext() if device_type == 'cpu' else torch.cuda.amp.autocast()
 
 # init from a model saved in a specific directory
-ckpt_path = 'out/sft_Llama2-Chinese-92M-v2/epoch_4.pth'
+ckpt_path = '/home/akai_wsl/code/llm/7llm_dingzhi/baby-llama2-chinese_cybertron/out/pretrain/epoch_0.pth'
 state_dict = torch.load(ckpt_path, map_location=device)
 gptconf = ModelArgs(**model_args)
 model = Transformer(gptconf)
@@ -77,7 +77,7 @@ if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
 # load the tokenizer
-tokenizer=ChatGLMTokenizer(vocab_file='./chatglm_tokenizer/tokenizer.model')
+tokenizer=ChatGLMTokenizer()
 #
 # data = []
 # with open('./test_data/test.json','r') as f:

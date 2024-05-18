@@ -10,7 +10,7 @@ from src.model import Transformer, ModelArgs
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from dataset import PretrainDataset
+from src.data.dataset_pretrain import PretrainDataset
 from src.utils import get_logger
 
 #To run with DDP on 4 gpus on 1 node, example:
@@ -158,19 +158,19 @@ if __name__=="__main__":
     out_dir = 'out'
     max_epoch = 1
     eval_interval = 1
-    log_interval = 100
+    log_interval = 200
     save_interval = 10000
     eval_iters = 200
     eval_only = False # if True, script exits right after the first eval
     always_save_checkpoint = True # if True, always save a checkpoint after each eval
     init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
     #
-    gradient_accumulation_steps = 1 # used to simulate larger batch sizes
+    gradient_accumulation_steps = 16 # used to simulate larger batch sizes
     batch_size = 16  # if gradient_accumulation_steps > 1, this is the micro-batch size
     # model 根据需要更改 
     max_seq_len = 256
-    dim = 256
-    n_layers = 6
+    dim = 512
+    n_layers = 10
     n_heads = 8
     multiple_of = 32
     dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+

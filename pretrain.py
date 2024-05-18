@@ -2,14 +2,14 @@ import os
 import time
 import torch
 from argparse import ArgumentParser
-from torch.distributed import destroy_process_group, init_process_group
+from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from src.data.dataset_pretrain import PretrainDataset
 from src.utils import *
 
 
-def train_epoch(epoch, pretrain_config):
+def train_epoch(epoch, pretrain_config, master_process):
     start_time=time.time()
     for step, (X, Y) in enumerate(train_loader):
         X=X.to(device)
@@ -49,9 +49,9 @@ def train_epoch(epoch, pretrain_config):
             optimizer.zero_grad(set_to_none=True)
 
         #打印日志
-        if step % pretrain_config['log_interval'] == 0:
+        if step % pretrain_config['log_interval'] == 0 and master_process:
             model.eval()
-            eval_model(model, ctx)
+            eval_model(raw_model, ctx)
             model.train()
 
             spend_time=time.time()-start_time
@@ -65,16 +65,10 @@ def train_epoch(epoch, pretrain_config):
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
         #
-        if step % pretrain_config['save_interval'] == 0:
-            if ddp:
-                if torch.distributed.get_rank() == 0:
-                    model.eval()
-                    torch.save(model.module.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
-                    model.train()
-            else:
-                model.eval()
-                torch.save(model.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
-                model.train()
+        if step % pretrain_config['save_interval'] == 0 and master_process:
+            model.eval()
+            torch.save(raw_model.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
+            model.train()
 
 # @torch.no_grad()
 # def valid_epoch(epoch):
@@ -112,7 +106,7 @@ if __name__=="__main__":
     save_dir =os.path.join(pretrain_config['out_dir'], 
                            f'pretrain_layer{model_config["n_layers"]}_dim{model_config["dim"]}_seq{model_config["max_seq_len"]}')
     
-    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
     
     # 保存一份参数
     with open(os.path.join(save_dir,'config.yaml'), "w") as file:
@@ -124,44 +118,17 @@ if __name__=="__main__":
    # various inits, derived attributes, I/O setup
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
     
-    if ddp:
-        # Check if the operating system is Windows
-        if os.name == 'nt':
-            # Diff between backends: https://pytorch.org/docs/stable/distributed.html
-            init_process_group(backend="gloo")
-        else:
-            # If the operating system is Linux based, os.name == 'posix'
-            init_process_group(backend="nccl")
-        ddp_rank = int(os.environ["RANK"])
-        ddp_local_rank = int(os.environ["LOCAL_RANK"])
-        ddp_world_size = int(os.environ["WORLD_SIZE"])
-        device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(device)
-        master_process = ddp_rank == 0  # this process will do logging, checkpointing etc.
-        seed_offset = ddp_rank  # each process gets a different seed
-        # world_size number of processes will be training simultaneously, so we can scale
-        # down the desired gradient accumulation iterations per process proportionally
-        #assert gradient_accumulation_steps % ddp_world_size == 0
-        #gradient_accumulation_steps //= ddp_world_size
-    else:
-        # if not ddp, we are running on a single gpu, and one process
-        master_process = True
-        seed_offset = 0
-        ddp_world_size = 1
-        device = pretrain_config['device']
+    master_process, ddp_world_size, ddp_local_rank, device = init_ddp(ddp, pretrain_config['device'])
+
     tokens_per_iter = pretrain_config['grad_accum_steps'] * ddp_world_size * pretrain_config['batch_size'] * model_config['max_seq_len']
     if master_process:
         print(f"tokens per iteration will be: {tokens_per_iter:,}")
         print(f"breaks down as: {pretrain_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {pretrain_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
-
-    if master_process:
         os.makedirs(pretrain_config['out_dir'], exist_ok=True)
-    torch.manual_seed(1337 + seed_offset)
-    torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-    torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+
     device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
     # note: float16 data type will automatically use a GradScaler
-    ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[pretrain_config['dtype']]
+    # ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[pretrain_config['dtype']]
     ctx = get_ctx(device_type)
     
     best_val_loss = 1e9
@@ -220,12 +187,9 @@ if __name__=="__main__":
     # training loop
     iter_per_epoch=len(train_loader)
     for epoch in range(pretrain_config['max_epoch']):
-        train_epoch(epoch, pretrain_config)
+        train_epoch(epoch, pretrain_config, master_process)
         #val_loss=valid_epoch(epoch)
-        if ddp:
-            if torch.distributed.get_rank() == 0:  #一般用0，当然，可以选任意的rank保存。
-                torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
-        else:
+        if master_process:  #一般用0，当然，可以选任意的rank保存。
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
     if ddp:
         destroy_process_group()

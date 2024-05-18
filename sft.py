@@ -11,7 +11,7 @@ from src.data.dataset_sft import SFTDataset
     
 
 #------------------------------------------------------------------------------
-def train_epoch(epoch):
+def train_epoch(epoch, sft_config, master_process):
     start_time=time.time()
     for step, (X, Y,loss_mask) in enumerate(train_loader):
         X=X.to(device)
@@ -52,10 +52,11 @@ def train_epoch(epoch):
         scaler.update()
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
+
         #打印日志
-        if step % sft_config['log_interval'] == 0:
+        if step % sft_config['log_interval'] == 0 and master_process:
             model.eval()
-            eval_model(model, ctx)
+            eval_model(raw_model, ctx)
             model.train()
 
             spend_time=time.time()-start_time
@@ -108,7 +109,7 @@ if __name__=="__main__":
     save_dir =os.path.join(sft_config['out_dir'], 
                            f'sft_layer{model_config["n_layers"]}_dim{model_config["dim"]}_seq{model_config["max_seq_len"]}')
     
-    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
 
         # 保存一份参数
     with open(os.path.join(save_dir,'config.yaml'), "w") as file:
@@ -119,25 +120,7 @@ if __name__=="__main__":
     # various inits, derived attributes, I/O setup
    # various inits, derived attributes, I/O setup
     ddp = int(os.environ.get("RANK", -1)) != -1  # is this a ddp run?
-    if ddp:
-        init_process_group(backend="nccl")
-        ddp_rank = int(os.environ["RANK"])
-        ddp_local_rank = int(os.environ["LOCAL_RANK"])
-        ddp_world_size = int(os.environ["WORLD_SIZE"])
-        device = f"cuda:{ddp_local_rank}"
-        torch.cuda.set_device(device)
-        master_process = ddp_rank == 0  # this process will do logging, checkpointing etc.
-        seed_offset = ddp_rank  # each process gets a different seed
-        # world_size number of processes will be training simultaneously, so we can scale
-        # down the desired gradient accumulation iterations per process proportionally
-        #assert sft_config['grad_accum_steps'] % ddp_world_size == 0
-        #sft_config['grad_accum_steps'] //= ddp_world_size
-    else:
-        # if not ddp, we are running on a single gpu, and one process
-        device = sft_config['device']
-        master_process = True
-        seed_offset = 0
-        ddp_world_size = 1
+    master_process, ddp_world_size, ddp_local_rank, device = init_ddp(ddp, sft_config['device'])
 
     tokens_per_iter = sft_config['grad_accum_steps'] * ddp_world_size * sft_config['batch_size'] * model_config["max_seq_len"]
     if master_process:
@@ -146,12 +129,9 @@ if __name__=="__main__":
 
     if master_process:
         os.makedirs(sft_config['out_dir'], exist_ok=True)
-    torch.manual_seed(1337 + seed_offset)
-    torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
-    torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
     device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
     # note: float16 data type will automatically use a GradScaler
-    ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[sft_config['dtype']]
+    # ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[sft_config['dtype']]
     ctx = get_ctx(device_type)
     
     best_val_loss = 1e9
@@ -201,15 +181,13 @@ if __name__=="__main__":
         prefix = "_orig_mod." if compile else ""
         model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
         model = DDP(model, device_ids=[ddp_local_rank])
-    #
+    
     raw_model = model.module if ddp else model # unwrap DDP container if needed
+
     # training loop
     for epoch in range(sft_config['max_epoch']):
-        train_epoch(epoch)
-        if ddp:
-            if torch.distributed.get_rank() == 0:
-                torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
-        else:
+        train_epoch(epoch, sft_config, master_process)
+        if master_process:
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
     if ddp:
         destroy_process_group()

@@ -5,6 +5,7 @@ import json
 import torch
 import math
 from contextlib import nullcontext
+from torch.distributed import init_process_group
 
 from src.models.model_args import ModelArgs
 from src.models.model import Transformer
@@ -70,6 +71,40 @@ def init_model(model_config=None, model_path=None, tokenizer=None):
 
     return model
 
+def init_ddp(ddp, device):
+    if ddp:
+        # Check if the operating system is Windows
+        if os.name == 'nt':
+            # Diff between backends: https://pytorch.org/docs/stable/distributed.html
+            init_process_group(backend="gloo")
+        else:
+            # If the operating system is Linux based, os.name == 'posix'
+            init_process_group(backend="nccl")
+        ddp_rank = int(os.environ["RANK"])
+        ddp_local_rank = int(os.environ["LOCAL_RANK"])
+        ddp_world_size = int(os.environ["WORLD_SIZE"])
+        device = f"cuda:{ddp_local_rank}"
+        torch.cuda.set_device(device)
+        master_process = ddp_rank == 0  # this process will do logging, checkpointing etc.
+        seed_offset = ddp_rank  # each process gets a different seed
+        # world_size number of processes will be training simultaneously, so we can scale
+        # down the desired gradient accumulation iterations per process proportionally
+        #assert gradient_accumulation_steps % ddp_world_size == 0
+        #gradient_accumulation_steps //= ddp_world_size
+    else:
+        # if not ddp, we are running on a single gpu, and one process
+        master_process = True
+        seed_offset = 0
+        ddp_world_size = 1
+        ddp_local_rank = 0
+        device = device
+
+    torch.manual_seed(1337 + seed_offset)
+    torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
+    torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
+
+    return master_process, ddp_world_size, ddp_local_rank, device
+
 def get_ctx(device_type):
     ctx = (
         nullcontext()
@@ -118,7 +153,7 @@ def eval_model(model, ctx=None):
         target = p['target']
         with torch.no_grad():
             with ctx:
-                y = model.generate(x, 50, temperature=1.0, top_k=30)
+                y = model.generate(x)
                 answer=tokenizer.decode(y[0].tolist())
                 answer=answer.replace(prompt,'')
                 print('[prompt]:',prompt)

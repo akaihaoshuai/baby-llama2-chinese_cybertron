@@ -301,17 +301,19 @@ def collect_all_pretrain_data():
         return
 
     print('concat pretrain_data.')
-    data_lst = []
+    token_num = 0
     for idx, data_file in enumerate(pretrain_data_bin_paths):
         print(f'[{idx}/{len(pretrain_data_bin_paths)}] read data: {data_file}')
         with open(data_file, 'rb') as f:
             data = np.fromfile(f, dtype=np.uint16)
-            data_lst.append(data)
 
-    arr = np.concatenate(data_lst)
-    print(f'tokens: {arr.shape[0]/1024/1024} M')
-    with open(os.path.join(DATA_PATH, 'pretrain_data.bin'), 'wb') as f:
-        f.write(arr.tobytes())
+            with open(os.path.join(DATA_PATH, 'pretrain_data.bin'), 'ab') as f:
+                f.write(data.tobytes())
+
+            token_num += data.shape[0]
+            del data
+
+    print(f'tokens: {token_num/1024/1024} M')
     print('finished.')
 
 

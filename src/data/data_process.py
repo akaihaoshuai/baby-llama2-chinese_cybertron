@@ -293,7 +293,7 @@ def collect_all_pretrain_data():
         abs_data_dir = os.path.join(pretrain_data_dir, data_dir)
         bin_list = os.listdir(abs_data_dir)
         for bin_name in bin_list:
-            if 'pretrain' in bin_name and bin_name.endswith('.bin'):
+            if bin_name.endswith('.bin'):
                 pretrain_data_bin_paths.append(os.path.join(abs_data_dir, bin_name))
 
     if len(pretrain_data_bin_paths)==0:

@@ -1,50 +1,15 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import time
-import math
-import pickle
-from contextlib import nullcontext
-import numpy as np
 import torch
-from model import Transformer, ModelArgs
+import numpy as np
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-import pandas as pd
-from dataset_sft import SFTDataset
-import logging
-import json
+from argparse import ArgumentParser
 import torch.nn.functional as F
-from chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
-        
-def get_logger(filename, verbosity=1, name=None):
-    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
-    formatter = logging.Formatter(
-        "[%(asctime)s][%(filename)s][%(levelname)s] %(message)s"
-    )
-    logger = logging.getLogger(name)
-    logger.setLevel(level_dict[verbosity])
+from src.utils import *
+from src.data.dataset_sft import SFTDataset
+    
 
-    fh = logging.FileHandler(filename, "w")
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logger.addHandler(sh)
-    return logger
-# -----------------------------------------------------------------------------
-def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * it / warmup_iters
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
 #------------------------------------------------------------------------------
 def train_epoch(epoch):
     start_time=time.time()
@@ -52,52 +17,61 @@ def train_epoch(epoch):
         X=X.to(device)
         Y=Y.to(device)
         loss_mask=loss_mask.to(device)
-        lr = get_lr(epoch*iter_per_epoch+step) if decay_lr else learning_rate
+        if sft_config['sft_params']['decay_lr'] :
+            lr = get_lr(epoch*iter_per_epoch+step, sft_config['sft_params']) 
+        else :
+            lr = sft_config['sft_params']['lr']
+
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
         # and using the GradScaler if data type is float16
-        #for micro_step in range(gradient_accumulation_steps):
+        #for micro_step in range(sft_config['grad_accum_steps']):
         if ddp:
             # in DDP training we only need to sync gradients at the last micro step.
             # the official way to do this is with model.no_sync() context manager, but
             # I really dislike that this bloats the code and forces us to repeat code
             # looking at the source of that context manager, it just toggles this variable
-            model.require_backward_grad_sync = 0 == gradient_accumulation_steps - 1
+            model.require_backward_grad_sync = 0 == sft_config['grad_accum_steps'] - 1
         with ctx:
             logits = model(X, Y)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
             loss_mask = loss_mask.view(-1)
             loss = torch.sum(loss*loss_mask)/loss_mask.sum()
             #loss = raw_model.last_loss
-            #loss = loss / gradient_accumulation_steps
+            #loss = loss / sft_config['grad_accum_steps']
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
-        #
+        
         # clip the gradient
-        if grad_clip != 0.0:
+        if sft_config['sft_params']['grad_clip'] != 0.0:
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), sft_config['sft_params']['grad_clip'])
         # step the optimizer and scaler if training in fp16
         scaler.step(optimizer)
         scaler.update()
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
         #打印日志
-        if step % log_interval == 0:
+        if step % sft_config['log_interval'] == 0:
+            model.eval()
+            eval_model(model, ctx)
+            model.train()
+
             spend_time=time.time()-start_time
             logger.info(
-                    'Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.7f} epoch_Time:{}min:'.format(
+                    'Epoch:[{}/{}]({}/{}) loss: {:.3f}. lr: {:.7f}. epoch_remain_time: {}min.'.format(
                         epoch,
-                        max_epoch, 
+                        sft_config['max_epoch'], 
                         step, 
                         iter_per_epoch,
                         loss.item(), 
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
+            
 #------------------
 @torch.no_grad()
-def valid_epoch(epoch):
+def valid_epoch(epoch, val_loader):
     global best_val_loss
     losses = []
     model.eval()
@@ -118,98 +92,29 @@ def valid_epoch(epoch):
     #
     return val_loss
 
-def init_model():
-    # model init
-    # model init
-    model_args = dict(
-        dim=dim,
-        n_layers=n_layers,
-        n_heads=n_heads,
-        n_kv_heads=n_heads,
-        vocab_size=64793,#64793,
-        multiple_of=multiple_of,
-        max_seq_len=max_seq_len,
-        dropout=dropout,
-    )  # start with model_args from command line
-    if init_from == "scratch":
-        # init a new model from scratch
-        print("Initializing a new model from scratch")
-        gptconf = ModelArgs(**model_args)
-        model = Transformer(gptconf)
-    elif init_from == "resume":
-        print(f"Resuming training from {out_dir}")
-        # resume training from a checkpoint.
-        ckpt_path = os.path.join(out_dir, "ckpt.pt")
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        checkpoint_model_args = checkpoint["model_args"]
-        # force these config attributes to be equal otherwise we can't even resume training
-        # the rest of the attributes (e.g. dropout) can stay as desired from command line
-        for k in ["dim", "n_layers", "n_heads", "n_kv_heads", "vocab_size", "multiple_of", "max_seq_len"]:
-            model_args[k] = checkpoint_model_args[k]
-        # create the model
-        gptconf = ModelArgs(**model_args)
-        model = Transformer(gptconf)
-        state_dict = checkpoint["model"]
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-        unwanted_prefix = "_orig_mod."
-        for k, v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
-        iter_num = checkpoint["iter_num"]
-        best_val_loss = checkpoint["best_val_loss"]
-    return model
+
 # I/O
 if __name__=="__main__":
-    out_dir = 'out'
-    max_epoch = 2
-    eval_interval = 1
-    log_interval = 50
-    eval_iters = 200
-    eval_only = False # if True, script exits right after the first eval
-    always_save_checkpoint = True # if True, always save a checkpoint after each eval
-    init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
-    #
-    gradient_accumulation_steps = 1 # used to simulate larger batch sizes
-    batch_size = 32 # if gradient_accumulation_steps > 1, this is the micro-batch size
-    # model
-    max_seq_len = 512
-    dim = 512
-    n_layers = 8
-    n_heads = 8
-    multiple_of = 32
-    dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-    bias = False # do we use bias inside LayerNorm and Linear layers?
-    # adamw optimizer
-    learning_rate = 2e-5 # max learning rate
-    weight_decay = 1e-4
-    beta1 = 0.9
-    beta2 = 0.95
-    grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-    # learning rate decay settings
-    decay_lr = True # whether to decay the learning rate
-    warmup_iters = 1000 # how many steps to warm up for
-    lr_decay_iters = 50000 # should be ~= max_iters per Chinchilla
-    min_lr = 1e-6 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-    # DDP settings
-    backend = 'nccl' # 'nccl', 'gloo', etc.
-    # system
-    device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-    dtype = 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-    compile = False # use PyTorch 2.0 to compile the model to be faster
-    # -----------------------------------------------------------------------------
-    config_keys = [
-        k
-        for k, v in globals().items()
-        if not k.startswith("_") and isinstance(v, (int, float, bool, str))
-    ]
-    # exec(open("configurator.py").read())  # overrides from command line or config file
-    # config = {k: globals()[k] for k in config_keys}  # will be useful for logging
-    # -----------------------------------------------------------------------------
+    parser = ArgumentParser()
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
+    parser.add_argument("--sft_file", type=str, default='./config/train.yaml', help="path to config")
+    args = parser.parse_args()
+    
+    model_path_dir = args.model_path if os.path.isdir(args.model_path) else os.path.dirname(args.model_path)
+    config_file = os.path.join(model_path_dir, "config.yaml")
+    model_config = read_config(config_file)
+    sft_config = read_config(args.sft_file)
 
-    save_dir =os.path.join(out_dir , 'sft')
+    save_dir =os.path.join(sft_config['out_dir'], 
+                           f'sft_layer{model_config["n_layers"]}_dim{model_config["dim"]}_seq{model_config["max_seq_len"]}')
+    
     if not os.path.exists(save_dir): os.makedirs(save_dir)
+
+        # 保存一份参数
+    with open(os.path.join(save_dir,'config.yaml'), "w") as file:
+        import yaml
+        file.write(yaml.dump(model_config))
+        
     logger = get_logger(os.path.join(save_dir,'log.log'))
     # various inits, derived attributes, I/O setup
    # various inits, derived attributes, I/O setup
@@ -225,81 +130,67 @@ if __name__=="__main__":
         seed_offset = ddp_rank  # each process gets a different seed
         # world_size number of processes will be training simultaneously, so we can scale
         # down the desired gradient accumulation iterations per process proportionally
-        #assert gradient_accumulation_steps % ddp_world_size == 0
-        #gradient_accumulation_steps //= ddp_world_size
+        #assert sft_config['grad_accum_steps'] % ddp_world_size == 0
+        #sft_config['grad_accum_steps'] //= ddp_world_size
     else:
         # if not ddp, we are running on a single gpu, and one process
+        device = sft_config['device']
         master_process = True
         seed_offset = 0
         ddp_world_size = 1
-    tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * max_seq_len
+
+    tokens_per_iter = sft_config['grad_accum_steps'] * ddp_world_size * sft_config['batch_size'] * model_config["max_seq_len"]
     if master_process:
         print(f"tokens per iteration will be: {tokens_per_iter:,}")
-        print(f"breaks down as: {gradient_accumulation_steps} grad accum steps * {ddp_world_size} processes * {batch_size} batch size * {max_seq_len} max seq len")
+        print(f"breaks down as: {sft_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {sft_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
 
     if master_process:
-        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(sft_config['out_dir'], exist_ok=True)
     torch.manual_seed(1337 + seed_offset)
     torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
     torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
     device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
     # note: float16 data type will automatically use a GradScaler
-    ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[dtype]
-    ctx = (
-        nullcontext()
-        if device_type == "cpu"
-        else torch.cuda.amp.autocast()
-    )
-    #
+    ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[sft_config['dtype']]
+    ctx = get_ctx(device_type)
+    
     best_val_loss = 1e9
     
     #-----init dataloader------
-    df=pd.read_csv('./sft_data/sft_data.csv')
-    # input=[]
-    # target=[]
-    # with open('../track1/train_valid.json','r') as f:
-    #     data=json.load(f)
-    # #
-    # for l in data:
-    #     input.append(l['question'])
-    #     target.append(l['answer'])
-    # df = pd.DataFrame()
-    # df['prompt']=input
-    # df['answer']=target
-    # df=pd.concat((df_sft,df[100:])).reset_index(drop=True)
-    df=df.sample(frac=1.0)
-    print(df)
-    tokenizer=ChatGLMTokenizer(vocab_file='./chatglm_tokenizer/tokenizer.model')
-    train_ds = SFTDataset(df,tokenizer, max_length=512)
+    train_ds = SFTDataset(sft_config['sft_data_path'], max_length=model_config['max_seq_len'])
     train_loader = torch.utils.data.DataLoader(
         train_ds,
-        batch_size=batch_size,
+        batch_size=sft_config['batch_size'],
         pin_memory=False,
         drop_last=False,
         shuffle=False,        
         num_workers=0,
     )
-    # val_ds = PretrainDataset(data_path_list, max_length=256)
+    # val_ds = PretrainDataset(data_path_list, max_length=model_config['max_seq_len'])
     # val_loader = torch.utils.data.DataLoader(
     #     val_ds,
-    #     batch_size=batch_size,
+    #     batch_size=sft_config['batch_size'],
     #     pin_memory=False,
     #     drop_last=False,
     #     shuffle=False,        
     #     num_workers=0,
     # )
+
     #init model
-    model=init_model()
-    model.load_state_dict(torch.load('./out/baike_pretrain/epoch_0.pth'))
+    model=init_model(model_config, model_path_dir)
     model.to(device)
+
     # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+    scaler = torch.cuda.amp.GradScaler(enabled=(sft_config['dtype'] == 'float16'))
     # optimizer
-    optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+    optimizer = model.configure_optimizers(sft_config['sft_params']['weight_decay'], 
+                                           sft_config['sft_params']['lr'], 
+                                           (sft_config['sft_params']['beta1'], sft_config['sft_params']['beta2']), 
+                                           device_type)
     #
     iter_per_epoch=len(train_loader)
     # compile the model
-    if compile:
+    if sft_config['compile']:
         print("compiling the model... (takes a ~minute)")
         unoptimized_model = model
         model = torch.compile(model) # requires PyTorch 2.0
@@ -313,9 +204,8 @@ if __name__=="__main__":
     #
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     # training loop
-    for epoch in range(max_epoch):
+    for epoch in range(sft_config['max_epoch']):
         train_epoch(epoch)
-        #val_loss=valid_epoch(epoch)
         if ddp:
             if torch.distributed.get_rank() == 0:
                 torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))

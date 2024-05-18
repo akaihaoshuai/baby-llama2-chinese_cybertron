@@ -1,7 +1,6 @@
 import math
 import struct
 import inspect
-from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 import numpy as np
@@ -9,17 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-@dataclass
-class ModelArgs:
-    dim: int = 1024
-    n_layers: int = 16
-    n_heads: int = 16
-    n_kv_heads: Optional[int] = None
-    vocab_size: int = -1  # defined later by tokenizer
-    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
-    norm_eps: float = 1e-5
-    max_seq_len: int = 2048
-    dropout: float = 0.0
+from src.models.model_args import ModelArgs
 
 
 class RMSNorm(torch.nn.Module):
@@ -205,6 +194,9 @@ class Transformer(nn.Module):
         super().__init__()
         self.params = params
         self.vocab_size = params.vocab_size
+        self.bos_id = params.bos_id
+        self.eos_id = params.eos_id
+        self.pad_id = params.pad_id
         self.n_layers = params.n_layers
 
         self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
@@ -219,7 +211,7 @@ class Transformer(nn.Module):
         self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
 
         # some useful precompute for the RoPE relative positional embeddings
-        freqs_cos, freqs_sin = precompute_freqs_cis(self.params.dim // self.params.n_heads, self.params.max_seq_len)
+        freqs_cos, freqs_sin = precompute_freqs_cis(params.dim // params.n_heads, params.max_seq_len)
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
@@ -307,22 +299,30 @@ class Transformer(nn.Module):
 
     #@torch.inference_mode()
     @torch.no_grad()
-    def generate(self, idx, eos, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, input_ids, 
+                 max_new_tokens=128, 
+                 temperature=1.0, 
+                 top_k=None,
+                 attention_mask=None,
+                 position_ids=None,
+                 use_cache=None,
+                 streamer=None,
+                 ):
         """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        Take a conditioning sequence of indices tokens (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         Also note this is a super inefficient version of sampling with no key/value cache.
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.params.max_seq_len else idx[:, -self.params.max_seq_len:]
+            token_cond = input_ids if input_ids.size(1) <= self.params.max_seq_len else input_ids[:, -self.params.max_seq_len:]
             # forward the model to get the logits for the index in the sequence
-            logits = self(idx_cond)
+            logits = self(token_cond)
             logits = logits[:, -1, :] # crop to just the final time step
             if temperature == 0.0:
                 # "sample" the single most likely index
-                _, idx_next = torch.topk(logits, k=1, dim=-1)
+                _, token_next = torch.topk(logits, k=1, dim=-1)
             else:
                 # pluck the logits at the final step and scale by desired temperature
                 logits = logits / temperature
@@ -332,13 +332,13 @@ class Transformer(nn.Module):
                     logits[logits < v[:, [-1]]] = -float('Inf')
                 # apply softmax to convert logits to (normalized) probabilities
                 probs = F.softmax(logits, dim=-1)
-                idx_next = torch.multinomial(probs, num_samples=1)
+                token_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-            if idx_next==eos:
+            input_ids = torch.cat((input_ids, token_next), dim=1)
+            if token_next==self.eos_id:
                 break
 
-        return idx
+        return input_ids
 
     def export(self, filepath='model.bin'):
         """export the model weights in fp32 into .bin file to be read from C"""

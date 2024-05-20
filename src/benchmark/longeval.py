@@ -105,7 +105,7 @@ def test_topics_one_sample(model, tokenizer, test_case, output_file, idx):
     
     with ctx:
         y = model.generate(x)
-    predict=tokenizer.decode(y[0].tolist())
+    predict=tokenizer.decode(y[0])
     predict=predict.replace(prompt,'')
     
     summary = f"Label: {topics[0]}, Predict: {predict}, prompt length: {len(prompt)}".replace('\n', ' ')

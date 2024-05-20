@@ -155,7 +155,7 @@ def eval_model(model, ctx=None):
         with torch.no_grad():
             with ctx:
                 y = model.generate(x)
-                answer=tokenizer.decode(y[0].tolist())
+                answer=tokenizer.decode(y[0])
                 answer=answer.replace(prompt,'')
                 print('[prompt]:',prompt)
                 print('[answer]:',answer)

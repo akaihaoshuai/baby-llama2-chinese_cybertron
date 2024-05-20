@@ -21,6 +21,11 @@ class ModelArgs:
     eos_id: int = 2
     pad_id: int = 0
 
+    # inference cache
+    cache_type : str = 'recent'   # all/recent
+    cache_start_size : int = 10
+    cache_recent_size : int = 1024
+
 
 @dataclass
 class AttentionOutput(ModelOutput):
@@ -42,7 +47,7 @@ class AttentionOutput(ModelOutput):
     """
 
     output: Optional[Tuple[torch.FloatTensor]] = None
-    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    past_key_value: Optional[Tuple[torch.FloatTensor]] = None
     qk_heatmap: Optional[numpy.float16] = None
 
 
@@ -67,7 +72,7 @@ class TransformerBlockOutput(ModelOutput):
     """
 
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    past_key_value: Optional[Tuple[torch.FloatTensor]] = None
     qk_heatmap: Optional[numpy.float16] = None
 
 

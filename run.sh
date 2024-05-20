@@ -38,7 +38,7 @@ fi
 # CUDA_VISIBLE_DEVICES=0 python quant_model.py --model ./out/pretrain.ckpt --dataset wikitext2 --wbits 4
 
 # 推理
-CUDA_VISIBLE_DEVICES=0 python web_inference.py --momodel_pathdel ./out/pretrain.ckpt
+CUDA_VISIBLE_DEVICES=0 python web_inference.py --model_path ./out/pretrain.ckpt
 CUDA_VISIBLE_DEVICES=0 python inference.py --model_path ./out/pretrain.ckpt
 
 # RLHF

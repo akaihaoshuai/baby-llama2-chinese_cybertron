@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
     parser.add_argument("--prompt", type=str, default='where are you from?', help="path to config")
-    parser.add_argument("--return_qk_head_hetmaps", type=bool, default=True, help="save qkhead heatmap")
+    parser.add_argument("--return_qk_head_hetmaps", type=bool, default=False, help="save qkhead heatmap")
     args = parser.parse_args()
 
     main(args)

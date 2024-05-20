@@ -1,14 +1,14 @@
 import math
 import struct
 import inspect
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.models.model_args import ModelArgs
+from src.models.model_args import *
 
 
 class RMSNorm(torch.nn.Module):
@@ -108,6 +108,7 @@ class Attention(nn.Module):
         x: torch.Tensor,
         freqs_cos: torch.Tensor,
         freqs_sin: torch.Tensor,
+        return_qk_head_hetmaps:bool=False,
     ):
         bsz, seqlen, _ = x.shape
 
@@ -131,6 +132,9 @@ class Attention(nn.Module):
 
         # flash implementation
         if self.flash:
+            if return_qk_head_hetmaps:
+                scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+
             output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None, dropout_p=self.dropout if self.training else 0.0, is_causal=True)
         else:
             # manual implementation
@@ -147,7 +151,15 @@ class Attention(nn.Module):
         # final projection into the residual stream
         output = self.wo(output)
         output = self.resid_dropout(output)
-        return output
+
+        if return_qk_head_hetmaps:
+            qk_heatmap = scores.detach().cpu().numpy()
+        else:
+            qk_heatmap=None
+
+        return AttentionOutput(output=output,
+                               past_key_values=None,
+                               qk_heatmap=qk_heatmap)
 
 
 class FeedForward(nn.Module):
@@ -181,13 +193,17 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
-    def forward(self, x, freqs_cos, freqs_sin):
-        h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
+    def forward(self, x, freqs_cos, freqs_sin, return_qk_head_hetmaps:bool=False):
+        attn_output = self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin, return_qk_head_hetmaps)
+        h = x + attn_output.output
         out = h + self.feed_forward.forward(self.ffn_norm(h))
-        return out
+
+        return TransformerBlockOutput(hidden_states=out,
+                                      past_key_values=None,
+                                      qk_heatmap=attn_output.qk_heatmap)
 
 
-class Transformer(nn.Module):
+class Cybertron(nn.Module):
     last_loss: Optional[torch.Tensor]
 
     def __init__(self, params: ModelArgs):
@@ -233,27 +249,46 @@ class Transformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, tokens: torch.Tensor, targets: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, tokens: torch.Tensor, 
+                targets: Optional[torch.Tensor] = None,
+                return_qk_head_hetmaps: bool = False,
+                ) -> torch.Tensor:
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         h = self.dropout(h)
         freqs_cos = self.freqs_cos[:seqlen]
         freqs_sin = self.freqs_sin[:seqlen]
 
+        qk_heatmap_lists = []
         for layer in self.layers:
-            h = layer(h, freqs_cos, freqs_sin)
+            layer_out = layer(h, freqs_cos, freqs_sin, return_qk_head_hetmaps)
+            h = layer_out.hidden_states
+
+            if return_qk_head_hetmaps:
+                qk_heatmap_lists.append(layer_out.qk_heatmap)
         h = self.norm(h)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.output(h)
             self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            last_logits = None
         else:
             # inference-time mini-optimization: only forward the output on the very last position
-            logits = self.output(h[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = None
+            last_logits = self.output(h[:, [-1], :]) # note: using list [-1] to preserve the time dim
             self.last_loss = None
+        
+        if not return_qk_head_hetmaps:
+            qk_heatmap_lists = None
 
-        return logits
+        return BaseLLMModelOutput(logits=logits,
+                                  last_logits=last_logits,
+                                  past_key_values=None,
+                                  last_loss=self.last_loss,
+                                  last_hidden_states=h,
+                                  qk_heatmap_lists=qk_heatmap_lists)
+
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
         # start with all of the candidate parameters
@@ -307,6 +342,7 @@ class Transformer(nn.Module):
                  position_ids=None,
                  use_cache=None,
                  streamer=None,
+                 return_qk_head_hetmaps: bool = False,
                  ):
         """
         Take a conditioning sequence of indices tokens (LongTensor of shape (b,t)) and complete
@@ -318,8 +354,9 @@ class Transformer(nn.Module):
             # if the sequence context is growing too long we must crop it at block_size
             token_cond = input_ids if input_ids.size(1) <= self.params.max_seq_len else input_ids[:, -self.params.max_seq_len:]
             # forward the model to get the logits for the index in the sequence
-            logits = self(token_cond)
-            logits = logits[:, -1, :] # crop to just the final time step
+            outputs = self(token_cond, return_qk_head_hetmaps=return_qk_head_hetmaps)
+
+            logits = outputs.last_logits[:, -1, :] # crop to just the final time step
             if temperature == 0.0:
                 # "sample" the single most likely index
                 _, token_next = torch.topk(logits, k=1, dim=-1)
@@ -337,8 +374,11 @@ class Transformer(nn.Module):
             input_ids = torch.cat((input_ids, token_next), dim=1)
             if token_next==self.eos_id:
                 break
-
-        return input_ids
+        
+        if return_qk_head_hetmaps:
+            return input_ids, outputs.qk_heatmap_lists
+        else:
+            return input_ids
 
     def export(self, filepath='model.bin'):
         """export the model weights in fp32 into .bin file to be read from C"""

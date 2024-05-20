@@ -2,7 +2,7 @@ import os
 import time
 import torch
 import numpy as np
-from torch.distributed import destroy_process_group, init_process_group
+from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from argparse import ArgumentParser
 import torch.nn.functional as F
@@ -33,7 +33,7 @@ def train_epoch(epoch, sft_config, master_process):
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = 0 == sft_config['grad_accum_steps'] - 1
         with ctx:
-            logits = model(X, Y)
+            logits = model(X, Y).logits
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
             loss_mask = loss_mask.view(-1)
             loss = torch.sum(loss*loss_mask)/loss_mask.sum()

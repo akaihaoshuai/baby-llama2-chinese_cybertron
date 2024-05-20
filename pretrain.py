@@ -30,8 +30,7 @@ def train_epoch(epoch, pretrain_config, master_process):
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = 0 == pretrain_config['grad_accum_steps'] - 1
         with ctx:
-            logits = model(X, Y)
-            loss = raw_model.last_loss
+            loss = model(X, Y).last_loss
             loss = loss / pretrain_config['grad_accum_steps']
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16

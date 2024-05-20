@@ -8,8 +8,9 @@ from contextlib import nullcontext
 from torch.distributed import init_process_group
 
 from src.models.model_args import ModelArgs
-from src.models.model import Transformer
+from src.models.cybertron import Cybertron
 from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
+
 
 def init_model(model_config=None, model_path=None, tokenizer=None):
     # model init
@@ -23,7 +24,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None):
         model_args.bos_id = tokenizer.tokenizer.bos_id
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
-        model = Transformer(model_args)
+        model = Cybertron(model_args)
     else:
         # resume training from a checkpoint.
         model_path_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_path)
@@ -54,7 +55,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None):
         model_args.bos_id = tokenizer.tokenizer.bos_id
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
-        model = Transformer(model_args)
+        model = Cybertron(model_args)
 
         if 'model' in checkpoint:
             state_dict = checkpoint["model"]
@@ -139,8 +140,8 @@ def eval_model(model, ctx=None):
 
     data = [
         {"question": "最近我在办公室坐久了会感到头晕，请问这是什么原因?有什么缓解办法吗？", "target": ""},
-        {"question": "前列腺囊肿的症状是什么？", "target": ""},
-        {"question": "请问，世界上最大的动物是什么？", "target": ""},
+        # {"question": "前列腺囊肿的症状是什么？", "target": ""},
+        # {"question": "请问，世界上最大的动物是什么？", "target": ""},
     ]
     if ctx is None:
          ctx = get_ctx(device)

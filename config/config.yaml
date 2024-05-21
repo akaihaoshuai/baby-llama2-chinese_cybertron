@@ -7,3 +7,6 @@ multiple_of : 32
 dropout : 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias : False # do we use bias inside LayerNorm and Linear layers?
 vocab_size: 64793
+rope_scaling_factor: 1.0
+rope_beta: 10000.0
+rope_scaling_type: 'dynamic'

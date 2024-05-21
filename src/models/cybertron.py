@@ -36,6 +36,59 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
     return freqs_cos, freqs_sin
 
 
+# Copied from transformers.models.bart.modeling_bart._make_causal_mask
+def _make_causal_mask(
+    input_ids_shape: torch.Size,
+    dtype: torch.dtype,
+    device: torch.device,
+    past_key_values_length: int = 0,
+):
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
+    bsz, tgt_len = input_ids_shape
+    mask = torch.full(
+        (tgt_len, tgt_len),
+        torch.tensor(torch.finfo(dtype).min, device=device),
+        device=device,
+    )
+
+    mask_cond = torch.arange(mask.size(-1), device=device)
+    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+    mask = mask.to(dtype)
+
+    if past_key_values_length > 0:
+        mask = torch.cat(
+            [
+                torch.zeros(
+                    tgt_len, past_key_values_length, dtype=dtype, device=device
+                ),
+                mask,
+            ],
+            dim=-1,
+        )
+    return mask[None, None, :, :].expand(
+        bsz, 1, tgt_len, tgt_len + past_key_values_length
+    )
+
+
+# Copied from transformers.models.bart.modeling_bart._expand_mask
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    """
+    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    """
+    bsz, src_len = mask.size()
+    tgt_len = tgt_len if tgt_len is not None else src_len
+
+    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+    inverted_mask = 1.0 - expanded_mask
+
+    return inverted_mask.masked_fill(
+        inverted_mask.to(torch.bool), torch.finfo(dtype).min
+    )
+
+
 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: ModelArgs):
@@ -54,13 +107,24 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
-    def forward(self, x, freqs_cos, freqs_sin, return_qk_head_hetmaps:bool=False):
-        attn_output = self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin, return_qk_head_hetmaps)
-        h = x + attn_output.output
-        out = h + self.feed_forward.forward(self.ffn_norm(h))
+    def forward(self,         
+                hidden_states: torch.Tensor,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                past_key_value: Optional[Tuple[torch.Tensor]] = None,
+                return_qk_head_hetmaps:bool=False):
+        
+        attn_output = self.attention.forward(self.attention_norm(hidden_states), 
+                                             attention_mask=attention_mask,
+                                             position_ids=position_ids,
+                                             past_key_value=past_key_value,
+                                             return_qk_head_hetmaps=return_qk_head_hetmaps)
+        
+        residual = hidden_states + attn_output.output
+        out = residual + self.feed_forward.forward(self.ffn_norm(residual))
 
         return TransformerBlockOutput(hidden_states=out,
-                                      past_key_value=None,
+                                      past_key_value=attn_output.past_key_value,
                                       qk_heatmap=attn_output.qk_heatmap)
 
 
@@ -110,34 +174,108 @@ class Cybertron(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    # Copied from transformers.models.bart.modeling_bart.BartDecoder._prepare_decoder_attention_mask
+    def _prepare_decoder_attention_mask(
+        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
+    ):
+
+        # create causal mask
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        combined_attention_mask = None
+        if input_shape[-1] > 1:
+            combined_attention_mask = _make_causal_mask(
+                input_shape,
+                inputs_embeds.dtype,
+                device=inputs_embeds.device,
+                past_key_values_length=past_key_values_length,
+            )
+
+        if attention_mask is not None:
+            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+            expanded_attn_mask = _expand_mask(
+                attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
+            ).to(inputs_embeds.device)
+
+            combined_attention_mask = (
+                expanded_attn_mask
+                if combined_attention_mask is None
+                else expanded_attn_mask + combined_attention_mask
+            )
+
+        return combined_attention_mask
+    
     def forward(self, tokens: torch.Tensor, 
                 targets: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                past_key_values: Optional[List[Tuple[torch.Tensor]]] = None,
                 return_qk_head_hetmaps: bool = False,
                 ) -> torch.Tensor:
-        _bsz, seqlen = tokens.shape
-        h = self.tok_embeddings(tokens)
-        h = self.dropout(h)
-        freqs_cos = self.freqs_cos[:seqlen]
-        freqs_sin = self.freqs_sin[:seqlen]
+        batch_size, seqlen = tokens.shape
+
+        seq_length_with_past = seqlen
+        past_key_values_length = 0
+        if past_key_values is not None:
+            past_key_values_length = past_key_values[0][0].shape[2]
+            seq_length_with_past = seq_length_with_past + past_key_values_length
+
+        if position_ids is None:
+            position_ids = torch.arange(
+                past_key_values_length, seqlen + past_key_values_length, dtype=torch.long, device=tokens.device
+            )
+            position_ids = position_ids.unsqueeze(0).view(-1, seqlen)
+        else:
+            position_ids = position_ids.view(-1, seqlen).long()
+
+        inputs_embeds = self.tok_embeddings(tokens)
+
+        if attention_mask is None:
+            attention_mask = torch.ones(
+                (batch_size, seq_length_with_past),
+                dtype=torch.bool,
+                device=tokens.device,
+            )
+
+        attention_mask = self._prepare_decoder_attention_mask(
+            attention_mask,
+            (batch_size, seqlen),
+            inputs_embeds,
+            past_key_values_length,
+        )
+
+        hidden_states = self.dropout(inputs_embeds)
 
         qk_heatmap_lists = []
-        for layer in self.layers:
-            layer_out = layer(h, freqs_cos, freqs_sin, return_qk_head_hetmaps)
-            h = layer_out.hidden_states
+        new_past_key_values = [] if past_key_values is not None else None
+        for idx, layer in enumerate(self.layers):
+            past_key_value = (
+                past_key_values[idx] if past_key_values is not None else None
+            )
+                        
+            layer_out = layer(hidden_states, 
+                              attention_mask=attention_mask,
+                              position_ids=position_ids,
+                              past_key_value=past_key_value,
+                              return_qk_head_hetmaps=return_qk_head_hetmaps)
+            hidden_states = layer_out.hidden_states
 
             if return_qk_head_hetmaps:
                 qk_heatmap_lists.append(layer_out.qk_heatmap)
-        h = self.norm(h)
+
+            if past_key_values is not None:
+                new_past_key_values.append(layer_out.past_key_value)
+
+        hidden_states = self.norm(hidden_states)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.output(h)
+            logits = self.output(hidden_states)
             self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             last_logits = None
         else:
             # inference-time mini-optimization: only forward the output on the very last position
             logits = None
-            last_logits = self.output(h[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            last_logits = self.output(hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
             self.last_loss = None
         
         if not return_qk_head_hetmaps:
@@ -145,9 +283,9 @@ class Cybertron(nn.Module):
 
         return BaseLLMModelOutput(logits=logits,
                                   last_logits=last_logits,
-                                  past_key_values=None,
+                                  past_key_values=new_past_key_values,
                                   last_loss=self.last_loss,
-                                  last_hidden_states=h,
+                                  last_hidden_states=hidden_states,
                                   qk_heatmap_lists=qk_heatmap_lists)
 
 

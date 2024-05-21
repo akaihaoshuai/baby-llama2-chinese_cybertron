@@ -3,7 +3,8 @@ import torch.nn.functional as F
 from torch import nn
 import math
 from src.models.model_args import *
-from src.layers.position_code import RotaryEmbedding
+from src.layers.position_code.rope import *
+
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
@@ -40,6 +41,8 @@ def apply_rotary_pos_emb(q, k, cos, sin, q_len, position_ids, unsqueeze_dim=1):
         `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
     """
     
+    cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
+    sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
     cos = cos[position_ids].unsqueeze(unsqueeze_dim)
     sin = sin[position_ids].unsqueeze(unsqueeze_dim)
     q_embed = (q * cos[:, :, -q_len:, :]) + (rotate_half(q) * sin[:, :, -q_len:, :])
@@ -48,31 +51,31 @@ def apply_rotary_pos_emb(q, k, cos, sin, q_len, position_ids, unsqueeze_dim=1):
 
 
 def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
     freqs_cos: torch.Tensor,
     freqs_sin: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    # reshape xq and xk to match the complex representation
-    xq_r, xq_i = xq.float().reshape(xq.shape[:-1] + (-1, 2)).unbind(-1)
-    xk_r, xk_i = xk.float().reshape(xk.shape[:-1] + (-1, 2)).unbind(-1)
+    # reshape query_states and key_states to match the complex representation
+    query_states_r, query_states_i = query_states.float().reshape(query_states.shape[:-1] + (-1, 2)).unbind(-1)
+    key_states_r, key_states_i = key_states.float().reshape(key_states.shape[:-1] + (-1, 2)).unbind(-1)
 
     # reshape freqs_cos and freqs_sin for broadcasting
-    freqs_cos = reshape_for_broadcast(freqs_cos, xq_r)
-    freqs_sin = reshape_for_broadcast(freqs_sin, xq_r)
+    freqs_cos = reshape_for_broadcast(freqs_cos, query_states_r)
+    freqs_sin = reshape_for_broadcast(freqs_sin, query_states_r)
 
     # apply rotation using real numbers
-    xq_out_r = xq_r * freqs_cos - xq_i * freqs_sin
-    xq_out_i = xq_r * freqs_sin + xq_i * freqs_cos
-    xk_out_r = xk_r * freqs_cos - xk_i * freqs_sin
-    xk_out_i = xk_r * freqs_sin + xk_i * freqs_cos
+    query_states_out_r = query_states_r * freqs_cos - query_states_i * freqs_sin
+    query_states_out_i = query_states_r * freqs_sin + query_states_i * freqs_cos
+    key_states_out_r = key_states_r * freqs_cos - key_states_i * freqs_sin
+    key_states_out_i = key_states_r * freqs_sin + key_states_i * freqs_cos
 
     # flatten last two dimensions
-    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(3)
-    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(3)
+    query_states_out = torch.stack([query_states_out_r, query_states_out_i], dim=-1).flatten(3)
+    key_states_out = torch.stack([key_states_out_r, key_states_out_i], dim=-1).flatten(3)
 
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    return query_states_out.type_as(query_states), key_states_out.type_as(key_states)
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
@@ -96,10 +99,10 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
-        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+        self.q_proj = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
@@ -112,60 +115,117 @@ class Attention(nn.Module):
             mask = torch.triu(mask, diagonal=1)
             self.register_buffer("mask", mask)
 
+
+        self.rope_scaling_factor = args.rope_scaling_factor
+        self.max_position_embeddings = args.max_seq_len
+        self.rope_beta = args.rope_beta
+        self.rope_scaling_type = args.rope_scaling_type
+        self._init_rope()
+
+
+    # from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py
+    def _init_rope(self):
+        if self.rope_scaling_factor <= 1.0:
+            self.rotary_emb = RotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_beta,
+            )
+        else:
+            if self.rope_scaling_type == "linear":
+                self.rotary_emb = LinearScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            elif self.rope_scaling_type == "dynamic":
+                self.rotary_emb = DynamicNTKScalingRotaryEmbedding(
+                    self.head_dim,
+                    max_position_embeddings=self.max_position_embeddings,
+                    scaling_factor=self.rope_scaling_factor,
+                    base=self.rope_beta,
+                )
+            elif self.rope_scaling_type == "clex":
+                from src.layers.position_code.clex import CLEXScalingRotaryEmbedding
+                self.rotary_emb = CLEXScalingRotaryEmbedding(
+                    dim=self.head_dim, 
+                    max_position_embeddings=self.max_position_embeddings, 
+                    rope_scaling_max_factor=self.rope_scaling_factor)
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {self.rope_scaling_type}")
+
+
     def forward(
         self,
-        x: torch.Tensor,
-        freqs_cos: torch.Tensor,
-        freqs_sin: torch.Tensor,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
         return_qk_head_hetmaps:bool=False,
     ):
-        bsz, seqlen, _ = x.shape
+        bsz, seqlen, _ = hidden_states.shape
 
         # QKV
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
-        xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-        xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
-        xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+        query_states, key_states, value_states = self.q_proj(hidden_states), self.k_proj(hidden_states), self.v_proj(hidden_states)
+        query_states = query_states.view(bsz, seqlen, self.n_local_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim).transpose(1, 2)
 
-        # RoPE relative positional embeddings
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cos, freqs_sin)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            kv_seq_len += past_key_value[0].shape[-2]
+
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, seqlen, position_ids)
+
+        if past_key_value is not None:
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            past_key_value = (key_states, value_states, cos, sin)
 
         # grouped multiquery attention: expand out keys and values
-        xk = repeat_kv(xk, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
-        xv = repeat_kv(xv, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
-
-        # make heads into a batch dimension
-        xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        xk = xk.transpose(1, 2)
-        xv = xv.transpose(1, 2)
+        key_states = repeat_kv(key_states, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
+        value_states = repeat_kv(value_states, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
 
         # flash implementation
         if self.flash:
             if return_qk_head_hetmaps:
-                scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+                attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-            output = torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=None, dropout_p=self.dropout if self.training else 0.0, is_causal=True)
+            output = torch.nn.functional.scaled_dot_product_attention(query_states, 
+                                                                      key_states, 
+                                                                      value_states, 
+                                                                      attn_mask=None, 
+                                                                      dropout_p=self.dropout if self.training else 0.0, 
+                                                                      is_causal=True)
         else:
             # manual implementation
-            scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
-            assert hasattr(self, 'mask')
-            scores = scores + self.mask[:, :, :seqlen, :seqlen]   # (bs, n_local_heads, seqlen, cache_len + seqlen)
-            scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-            scores = self.attn_dropout(scores)
-            output = torch.matmul(scores, xv)  # (bs, n_local_heads, seqlen, head_dim)
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+            
+            if attention_mask is not None:
+                attn_weights = attn_weights + attention_mask
+                attn_weights = torch.max(
+                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
+                )
+            
+            # attn_weights = attn_weights + self.mask[:, :, :seqlen, :seqlen]   # (bs, n_local_heads, seqlen, cache_len + seqlen)
+            attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(query_states)
+            attn_weights = self.attn_dropout(attn_weights)
+            output = torch.matmul(attn_weights, value_states)  # (bs, n_local_heads, seqlen, head_dim)
 
         # restore time as batch dimension and concat heads
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
 
         # final projection into the residual stream
-        output = self.wo(output)
+        output = self.o_proj(output)
         output = self.resid_dropout(output)
 
         if return_qk_head_hetmaps:
-            qk_heatmap = scores.detach().cpu().numpy()
+            qk_heatmap = attn_weights.detach().cpu().numpy()
         else:
             qk_heatmap=None
 
         return AttentionOutput(output=output,
-                               past_key_value=None,
+                               past_key_value=past_key_value,
                                qk_heatmap=qk_heatmap)

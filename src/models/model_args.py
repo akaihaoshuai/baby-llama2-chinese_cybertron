@@ -13,13 +13,19 @@ class ModelArgs:
     vocab_size: int = 64793  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
     norm_eps: float = 1e-5
-    max_seq_len: int = 2048
+    max_seq_len: int = 1024
     dropout: float = 0.0
     bias: bool = False
 
     bos_id: int = 1
     eos_id: int = 2
     pad_id: int = 0
+
+    # position code
+    rope_scaling_factor: float = 1.0
+    # max_position_embeddings: int = 1024  # max_seq_len
+    rope_beta: float = 10000.0
+    rope_scaling_type: str = 'dynamic'
 
     # inference cache
     cache_type : str = 'recent'   # all/recent
@@ -103,7 +109,7 @@ class BaseLLMModelOutput(ModelOutput):
 
     logits: Optional[Tuple[torch.FloatTensor]] = None
     last_logits: Optional[Tuple[torch.FloatTensor]] = None
-    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    past_key_values: Optional[List[Tuple[torch.FloatTensor]]] = None
     last_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     qk_heatmap_lists: Optional[List[numpy.float16]] = None
     last_loss: Optional[torch.FloatTensor] = None

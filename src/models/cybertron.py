@@ -10,7 +10,7 @@ from torch import nn
 
 from src.models.model_args import *
 from src.layers.attention import Attention
-from src.layers.ffn import FeedForward
+from src.layers.ffn import FeedForward, MOElayers
 
 
 class RMSNorm(torch.nn.Module):
@@ -97,12 +97,23 @@ class TransformerBlock(nn.Module):
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
         self.attention = Attention(args)
-        self.feed_forward = FeedForward(
-            dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            dropout=args.dropout,
-        )
+
+        if not args.use_moe:
+            self.feed_forward = FeedForward(
+                    dim=args.dim,
+                    hidden_dim=4 * args.dim,
+                    multiple_of=args.multiple_of,
+                    dropout=args.dropout,
+                )
+        else:
+            self.feed_forward = MOElayers(
+                dim=args.dim,
+                hidden_dim=4 * args.dim,
+                multiple_of=args.multiple_of,
+                dropout=args.dropout,
+                num_total_experts = args.num_total_experts,
+                num_experts_per_tok = args.num_experts_per_tok,
+            )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)

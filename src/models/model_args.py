@@ -17,6 +17,10 @@ class ModelArgs:
     dropout: float = 0.0
     bias: bool = False
 
+    use_moe: bool = False
+    num_total_experts: int = 2
+    num_experts_per_tok: int = 1
+
     bos_id: int = 1
     eos_id: int = 2
     pad_id: int = 0

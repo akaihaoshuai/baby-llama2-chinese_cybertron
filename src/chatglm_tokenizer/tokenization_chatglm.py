@@ -73,6 +73,12 @@ class ChatGLMTokenizer(PreTrainedTokenizer):
 
         if vocab_file is None:
             vocab_file = os.path.join(current_dir, 'tokenizer.model')
+        else:
+            assert os.path.isdir(vocab_file)
+            if os.path.exists(os.path.join(vocab_file, 'tokenizer.model')):
+                vocab_file = os.path.join(vocab_file, 'tokenizer.model')
+            else:
+                vocab_file = os.path.join(current_dir, 'tokenizer.model')
         
         self.vocab_file = vocab_file
         self.tokenizer = SPTokenizer(vocab_file)

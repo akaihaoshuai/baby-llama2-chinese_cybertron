@@ -4,6 +4,8 @@ from torch import nn
 import math
 from src.models.model_args import *
 from src.layers.position_code.rope import *
+from src.utils import *
+from src.layers.linear_load import create_linear
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
@@ -89,20 +91,19 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
     )
 
 
-
 class Attention(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ModelArgs, lora_args: LoraArgs = None):
         super().__init__()
         self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         model_parallel_size = 1
         self.n_local_heads = args.n_heads // model_parallel_size
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
-        self.head_dim = args.dim // args.n_heads
-        self.q_proj = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+        self.head_dim = args.hidden_dim // args.n_heads
+        self.q_proj = create_linear(args.hidden_dim, args.n_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
+        self.k_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
+        self.v_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
+        self.o_proj = create_linear(args.n_heads * self.head_dim, args.hidden_dim, bias=args.bias, lora_args=lora_args)
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
@@ -110,7 +111,7 @@ class Attention(nn.Module):
         # use flash attention or a manual implementation?
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+            print_rank_0("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             mask = torch.full((1, 1, args.max_seq_len, args.max_seq_len), float("-inf"))
             mask = torch.triu(mask, diagonal=1)
             self.register_buffer("mask", mask)

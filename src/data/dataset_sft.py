@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset
 from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
+from src.utils import *
 
 class SFTDataset(Dataset):
     def __init__(self, sft_data_path, 
@@ -29,7 +30,7 @@ class SFTDataset(Dataset):
         self.tokenizer = tokenizer
         self.bos=self.tokenizer.special_tokens['<bos>']
         self.eos=self.tokenizer.special_tokens['<eos>']
-        self.pad=0#self.tokenizer.special_tokens['<pad>']
+        self.pad=self.tokenizer.special_tokens['<pad>']
         
     def __len__(self):
         return self.df.shape[0]
@@ -73,8 +74,8 @@ if __name__=="__main__":
         num_workers=0,
     )
     for i, (X, Y,loss_mask) in enumerate(train_loader):
-        print(X.shape,Y.shape)
-        print(X[0])
-        print(Y[0])
-        print(loss_mask[0])
+        print_rank_0(X.shape,Y.shape)
+        print_rank_0(X[0])
+        print_rank_0(Y[0])
+        print_rank_0(loss_mask[0])
         break

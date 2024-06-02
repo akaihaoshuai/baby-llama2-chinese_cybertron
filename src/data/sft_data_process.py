@@ -2,13 +2,14 @@ import json
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
+from src.utils import *
 
 SFT_DATA = './sft_data'
 
 def sft_process():
-    with open('./sft_data/alpaca_gpt4_data_zh.json', 'r', encoding='utf-8') as f:
+    with open('./data/alpaca_gpt4_data_zh.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
-    #
+    
     q_lst = []
     a_lst = []
     for per in data:
@@ -23,9 +24,7 @@ def sft_process():
         q_lst.append(q)
         a_lst.append(a)
 
-    f = open('./sft_data/Belle_open_source_1M.json', 'r', encoding='utf-8')
-
-    # s
+    f = open('./data/Belle_open_source_1M.json', 'r', encoding='utf-8')
     while True:
         line = f.readline()
         if not line:
@@ -41,8 +40,9 @@ def sft_process():
             continue
         q_lst.append(q)
         a_lst.append(a)
+
     df = pd.DataFrame(columns=['prompt', 'answer'])
     df['prompt'] = q_lst
     df['answer'] = a_lst
-    df.to_csv('sft_data/sft_data.csv', index=False)
-    print(df)
+    df.to_csv('data/sft_data.csv', index=False)
+    print_rank_0(df)

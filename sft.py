@@ -6,9 +6,10 @@ from torch.distributed import destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from argparse import ArgumentParser
 import torch.nn.functional as F
+import yaml
 from src.utils import *
 from src.data.dataset_sft import SFTDataset
-    
+from src.model_runner import init_model, eval_model, set_model_eval, set_model_train
 
 #------------------------------------------------------------------------------
 def train_epoch(epoch, sft_config, master_process):
@@ -54,10 +55,10 @@ def train_epoch(epoch, sft_config, master_process):
         optimizer.zero_grad(set_to_none=True)
 
         #打印日志
-        if step % sft_config['log_interval'] == 0 and master_process:
-            model.eval()
+        if step > 0 and step % sft_config['log_interval'] == 0 and master_process:
+            set_model_eval(model)
             eval_model(raw_model, ctx)
-            model.train()
+            set_model_train(model)
 
             spend_time=time.time()-start_time
             logger.info(
@@ -75,14 +76,14 @@ def train_epoch(epoch, sft_config, master_process):
 def valid_epoch(epoch, val_loader):
     global best_val_loss
     losses = []
-    model.eval()
+    set_model_eval(model)
     for _, (X, Y) in enumerate(val_loader):
         X=X.to(device)
         Y=Y.to(device)
         with ctx:
             logits, loss = model(X, Y)
         losses.append(loss.item())
-    model.train()
+    set_model_train(model)
     val_loss=np.mean(losses)
     #
     logger.info('valid loss = {:.4f}'.format(val_loss))
@@ -97,7 +98,7 @@ def valid_epoch(epoch, val_loader):
 # I/O
 if __name__=="__main__":
     parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer12_dim768_seq768', help="path to config")
     parser.add_argument("--sft_file", type=str, default='./config/train.yaml', help="path to config")
     args = parser.parse_args()
     
@@ -107,15 +108,20 @@ if __name__=="__main__":
     sft_config = read_config(args.sft_file)
 
     save_dir =os.path.join(sft_config['out_dir'], 
-                           f'sft_layer{model_config["n_layers"]}_dim{model_config["dim"]}_seq{model_config["max_seq_len"]}')
+                           f'sft_layer{model_config["n_layers"]}_dim{model_config["hidden_dim"]}_seq{model_config["max_seq_len"]}')
     
     os.makedirs(save_dir, exist_ok=True)
 
-        # 保存一份参数
+    # 保存一份参数
     with open(os.path.join(save_dir,'config.yaml'), "w") as file:
-        import yaml
         file.write(yaml.dump(model_config))
-        
+    
+    lora_config = None
+    if sft_config['sft_params']['type'] == 'lora':
+        lora_config = read_config(args.sft_file.replace('train.yaml', 'lora.yaml'))
+        with open(os.path.join(save_dir,'lora.yaml'), "w") as file:
+            file.write(yaml.dump(lora_config))
+
     logger = get_logger(os.path.join(save_dir,'log.log'))
     # various inits, derived attributes, I/O setup
    # various inits, derived attributes, I/O setup
@@ -124,8 +130,8 @@ if __name__=="__main__":
 
     tokens_per_iter = sft_config['grad_accum_steps'] * ddp_world_size * sft_config['batch_size'] * model_config["max_seq_len"]
     if master_process:
-        print(f"tokens per iteration will be: {tokens_per_iter:,}")
-        print(f"breaks down as: {sft_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {sft_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
+        print_rank_0(f"tokens per iteration will be: {tokens_per_iter:,}")
+        print_rank_0(f"breaks down as: {sft_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {sft_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
 
     if master_process:
         os.makedirs(sft_config['out_dir'], exist_ok=True)
@@ -135,9 +141,24 @@ if __name__=="__main__":
     ctx = get_ctx(device_type)
     
     best_val_loss = 1e9
+
+    #init model
+    model, tokenizer = init_model(model_config, model_path_dir, lora_config=lora_config)
+    model.to(device)
+    set_model_train(model)
+    print_rank_0('***************model****************')
+    print_rank_0(model)
+
+    # initialize a GradScaler. If enabled=False scaler is a no-op
+    scaler = torch.cuda.amp.GradScaler(enabled=(sft_config['dtype'] == 'float16'))
+    # optimizer
+    optimizer = model.configure_optimizers(sft_config['sft_params']['weight_decay'], 
+                                           sft_config['sft_params']['lr'], 
+                                           (sft_config['sft_params']['beta1'], sft_config['sft_params']['beta2']), 
+                                           device_type)
     
     #-----init dataloader------
-    train_ds = SFTDataset(sft_config['sft_data_path'], max_length=model_config['max_seq_len'])
+    train_ds = SFTDataset(sft_config['sft_data_path'], max_length=model_config['max_seq_len'], tokenizer=tokenizer)
     train_loader = torch.utils.data.DataLoader(
         train_ds,
         batch_size=sft_config['batch_size'],
@@ -156,22 +177,10 @@ if __name__=="__main__":
     #     num_workers=0,
     # )
 
-    #init model
-    model=init_model(model_config, model_path_dir)
-    model.to(device)
-
-    # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(sft_config['dtype'] == 'float16'))
-    # optimizer
-    optimizer = model.configure_optimizers(sft_config['sft_params']['weight_decay'], 
-                                           sft_config['sft_params']['lr'], 
-                                           (sft_config['sft_params']['beta1'], sft_config['sft_params']['beta2']), 
-                                           device_type)
-    #
     iter_per_epoch=len(train_loader)
     # compile the model
     if sft_config['compile']:
-        print("compiling the model... (takes a ~minute)")
+        print_rank_0("compiling the model... (takes a ~minute)")
         unoptimized_model = model
         model = torch.compile(model) # requires PyTorch 2.0
     # wrap model into DDP container

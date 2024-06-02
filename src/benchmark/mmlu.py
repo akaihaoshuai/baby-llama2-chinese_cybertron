@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from datasets import load_dataset
-from src.utils import get_ctx
+from src.utils import get_ctx, print_rank_0
 from src.benchmark.categories import subcategories, categories
 
 def format_subject(subject):
@@ -98,7 +98,7 @@ def eval_single_subject(shot, subject, model, tokenizer, dev_df, test_df, choice
     cors = np.array(cors)
 
     all_probs = np.array(all_probs)
-    print("Average accuracy {:.3f} - {}".format(acc, subject))
+    print_rank_0("Average accuracy {:.3f} - {}".format(acc, subject))
 
     return cors, acc, all_probs
 
@@ -121,7 +121,7 @@ def mmlu_eval_func(data_path, shot, model, tokenizer, model_path_name, benchmark
                 os.path.join(data_path, "test", subject + "_test.csv"), header=None
             )
         else:
-            print(f'file no existed. load_dataset from huggingface: {MMLU_DATA_PATH}/{subject}')
+            print_rank_0(f'file no existed. load_dataset from huggingface: {MMLU_DATA_PATH}/{subject}')
             dev_df = load_dataset(MMLU_DATA_PATH, subject, split='dev')
             test_df = load_dataset(MMLU_DATA_PATH, subject, split='test')
 
@@ -148,12 +148,12 @@ def mmlu_eval_func(data_path, shot, model, tokenizer, model_path_name, benchmark
 
     for subcat in subcat_cors:
         subcat_acc = np.mean(np.concatenate(subcat_cors[subcat]))
-        print("Average accuracy {:.3f} - {}".format(subcat_acc, subcat))
+        print_rank_0("Average accuracy {:.3f} - {}".format(subcat_acc, subcat))
 
     for cat in cat_cors:
         cat_acc = np.mean(np.concatenate(cat_cors[cat]))
-        print("Average accuracy {:.3f} - {}".format(cat_acc, cat))
+        print_rank_0("Average accuracy {:.3f} - {}".format(cat_acc, cat))
     weighted_acc = np.mean(np.concatenate(all_cors))
-    print("Average accuracy: {:.3f}".format(weighted_acc))
+    print_rank_0("Average accuracy: {:.3f}".format(weighted_acc))
 
     return cat_cors, weighted_acc

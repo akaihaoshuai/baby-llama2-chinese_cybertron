@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torchdiffeq import odeint
-
+from src.utils import *
 
 import math
 
@@ -84,7 +84,7 @@ class CLEXScalingRotaryEmbedding(nn.Module):
         )
         if time_grid.size(0) == 2:
             scale_inv_freq = torch.exp(solution[1])
-            # print(time_grid[1].tolist(), torch.sum(scale_inv_freq).tolist(), torch.sum(self.proj_func.ode_down_proj).tolist())
+            # print_rank_0(time_grid[1].tolist(), torch.sum(scale_inv_freq).tolist(), torch.sum(self.proj_func.ode_down_proj).tolist())
             freqs = torch.outer(ex_positions.float().squeeze(), scale_inv_freq)
         else:
             scale_inv_freq = torch.exp(solution)

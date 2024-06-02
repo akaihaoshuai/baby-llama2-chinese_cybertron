@@ -5,6 +5,7 @@ import numpy as np
 from torch.utils.data import Dataset,DataLoader
 import torch
 from sklearn.model_selection import train_test_split
+from src.utils import *
 
 class PretrainDataset(Dataset):
     def __init__(self,data_path_lst, max_length=256, memmap=False):
@@ -25,9 +26,9 @@ class PretrainDataset(Dataset):
             data = data[:max_length*int(len(data)/max_length)]
             #np.random.shuffle(data)
             self.data = data.reshape(-1,max_length)
-        #
-        print("memmap:{} train data.shape:{}".format(memmap,self.data.shape))
-        print("downloading finished.....")
+        
+        print_rank_0("PretrainDataset.....")
+        print_rank_0(f"memmap:{memmap}.  train data.shape:{self.data.shape}.  tokens num: {self.data.shape[0]*self.data.shape[1]/1024/1024/1024:.3f}B.")
         
     def __len__(self):
         return self.data.shape[0]

@@ -4,7 +4,7 @@ import json
 import torch
 import time
 import re
-from src.utils import get_ctx
+from src.utils import get_ctx, print_rank_0
 
 
 # from  https://github.com/DachengLi1/LongChat
@@ -42,37 +42,37 @@ def retrieve_from_openai(prompt, model_name, num_retries=10):
             )
             break
         except openai.error.APIError as e:
-            print(f"OpenAI API returned an API Error: {e}")
+            print_rank_0(f"OpenAI API returned an API Error: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.APIConnectionError as e:
-            print(f"Failed to connect to OpenAI API: {e}")
+            print_rank_0(f"Failed to connect to OpenAI API: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.RateLimitError as e:
-            print(f"OpenAI API request exceeded rate limit: {e}")
+            print_rank_0(f"OpenAI API request exceeded rate limit: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.Timeout as e:
-            print(f"OpenAI API request timed out: {e}")
+            print_rank_0(f"OpenAI API request timed out: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.InvalidRequestError as e:
-            print(f"Invalid request to OpenAI API: {e}")
+            print_rank_0(f"Invalid request to OpenAI API: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.AuthenticationError as e:
-            print(f"Authentication error with OpenAI API: {e}")
+            print_rank_0(f"Authentication error with OpenAI API: {e}")
             if attempt == num_retries - 1:
                 raise
         except openai.error.ServiceUnavailableError as e:
-            print(f"OpenAI API service unavailable: {e}")
+            print_rank_0(f"OpenAI API service unavailable: {e}")
             if attempt == num_retries - 1:
                 raise
         time.sleep(backoff)
 
     if completion is None:
-        print(f"Failed to get response after {num_retries} retries")
+        print_rank_0(f"Failed to get response after {num_retries} retries")
         return token_size, -1, "Rate limit"
 
     response_line = completion.choices[0].message["content"]
@@ -109,7 +109,7 @@ def test_topics_one_sample(model, tokenizer, test_case, output_file, idx):
     predict=predict.replace(prompt,'')
     
     summary = f"Label: {topics[0]}, Predict: {predict}, prompt length: {len(prompt)}".replace('\n', ' ')
-    print(summary)
+    print_rank_0(summary)
 
     if idx ==0:
         with open(output_file, "w") as f:
@@ -140,11 +140,11 @@ def test_lines_one_sample(model, tokenizer, test_case, output_file, idx):
     if response_number is not None and len(response_number) > 0:
         response_number = int(response_number[-1])
     else:
-        print(f"Got unparsable result")
+        print_rank_0(f"Got unparsable result")
         response_number = -1
 
     summary = f"Label: {expected_number}, Predict: {predict}, Parsed: {response_number}, prompt length: {len(prompt)}".replace('\n', ' ')
-    # print(summary)
+    # print_rank_0(summary)
     if idx ==0:
         with open(output_file, "w") as f:
             f.write(summary)
@@ -166,7 +166,7 @@ def longeval_eval_func(data_path, model, tokenizer, benchmark_dir):
     # for num_topics in [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100]:
     if False:
         for num_topics in [5, 10, 15, 20, 25, 30]:
-            print(f"************ Start testing {num_topics} topics per prompt ***********")
+            print_rank_0(f"************ Start testing {num_topics} topics per prompt ***********")
             avg_length = 0
 
             test_file = os.path.join(data_path, f"topics/testcases/{num_topics}_topics.jsonl")
@@ -180,13 +180,13 @@ def longeval_eval_func(data_path, model, tokenizer, benchmark_dir):
                 avg_length += prompt_length / len(test_cases)
 
             scores[f'topics{num_topics}'] = 0
-            print(f"************ Finish testing {num_topics} topics per prompt with average prompt length {avg_length} ************")
+            print_rank_0(f"************ Finish testing {num_topics} topics per prompt with average prompt length {avg_length} ************")
 
 
     # elif opt.task == "lines":
     # for num_lines in [200, 300, 400, 500, 600, 680, 700, 800, 900, 1000, 1100, 1200, 1350]:
     for num_lines in [200, 300, 400, 500, 600]:
-        print(f"************ Start testing {num_lines} lines per LRT prompt ************")
+        print_rank_0(f"************ Start testing {num_lines} lines per LRT prompt ************")
         test_file = os.path.join(data_path, f"lines/testcases/{num_lines}_lines.jsonl")
         
         output_file = os.path.join(dir_name, f"{num_lines}_response.txt")
@@ -207,9 +207,9 @@ def longeval_eval_func(data_path, model, tokenizer, benchmark_dir):
             f.write(f"Accuracy: {accuracy}")
 
         scores[f'lines_{num_lines}'] = accuracy
-        print(f"************ Finish testing {num_lines} lines per prompt with average prompt length {avg_length}, accuracy: {accuracy} ************")
+        print_rank_0(f"************ Finish testing {num_lines} lines per prompt with average prompt length {avg_length}, accuracy: {accuracy} ************")
 
     weighted_acc = sum(scores.values())/len(scores)
-    print("LongBench Average accuracy: {:.3f}".format(weighted_acc))
+    print_rank_0("LongBench Average accuracy: {:.3f}".format(weighted_acc))
 
     return scores, weighted_acc

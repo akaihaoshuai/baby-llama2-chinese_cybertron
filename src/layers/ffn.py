@@ -1,18 +1,27 @@
 import torch.nn.functional as F
 from torch import nn
-from src.models.model_args import *
 import numpy
-
+from src.models.model_args import *
+from src.layers.linear_load import create_linear
+from src.layers.activation import get_act_fn
 
 class FeedForward(nn.Module):
-    def __init__(self, dim: int, hidden_dim: int, multiple_of: int, dropout: float):
+    def __init__(self, hidden_size: int, 
+                 intermediate_size: int, 
+                 multiple_of: int, 
+                 use_bias: False, 
+                 dropout: float, 
+                 act_fn='silu', 
+                 lora_args: LoraArgs = None,
+                 ):
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        intermediate_size = int(2 * intermediate_size / 3)
+        intermediate_size = multiple_of * ((intermediate_size + multiple_of - 1) // multiple_of)
+        self.w1 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args)
+        self.w2 = create_linear(intermediate_size, hidden_size, bias=use_bias, lora_args=lora_args)
+        self.w3 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args)
         self.dropout = nn.Dropout(dropout)
+        self.act_fn = get_act_fn(act_fn)
 
     def forward(self, x):
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
@@ -20,24 +29,27 @@ class FeedForward(nn.Module):
 
 
 class MOElayers(nn.Module):
-    def __init__(self, dim: int, 
-                 hidden_dim: int, 
-                 multiple_of: int, 
-                 dropout: float,
-                 num_total_experts: int = 2,
-                 num_experts_per_tok: int = 1,
+    def __init__(self, hidden_size: int, 
+                 intermediate_size: int, 
+                 num_total_experts: int = 8,
+                 num_experts_per_tok: int = 2,
+                 multiple_of: int = 32, 
+                 use_bias: bool = False, 
+                 dropout: float = 0.1, 
+                 act_fn: str ='silu', 
+                 lora_args: LoraArgs = None,
                  ):
         super().__init__()
         self.tp_size = 1
         self.num_total_experts = num_total_experts
         self.top_k = num_experts_per_tok
 
-        self.gate = nn.Linear(dim, self.num_total_experts, bias=False)
+        self.gate = create_linear(hidden_size, self.num_total_experts, bias=use_bias, lora_args=lora_args)
 
-        self.mlp = FeedForward(dim, hidden_dim, multiple_of, dropout)
+        # self.mlp = FeedForward(hidden_size, intermediate_size, multiple_of, dropout)
         self.expert_indicies = numpy.array_split(range(self.num_total_experts), self.tp_size)[0].tolist()
         self.experts = nn.ModuleList([
-            FeedForward(dim, hidden_dim, multiple_of, dropout)
+            FeedForward(hidden_size, intermediate_size, multiple_of, use_bias, dropout, act_fn, lora_args=lora_args)
             if idx in self.expert_indicies else None
             for idx in range(self.num_total_experts)
         ])

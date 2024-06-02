@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from src.utils import *
 from src.models.model_args import *
 from src.layers.attention import Attention
 from src.layers.ffn import FeedForward, MOElayers
@@ -91,32 +92,40 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: ModelArgs):
+    def __init__(self, layer_id: int, 
+                 args: ModelArgs, 
+                 lora_args: LoraArgs = None):
         super().__init__()
         self.n_heads = args.n_heads
-        self.dim = args.dim
-        self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args)
+        self.dim = args.hidden_dim
+        self.head_dim = args.hidden_dim // args.n_heads
+        self.attention = Attention(args, lora_args)
 
         if not args.use_moe:
             self.feed_forward = FeedForward(
-                    dim=args.dim,
-                    hidden_dim=4 * args.dim,
+                    hidden_size=args.hidden_dim,
+                    intermediate_size = 4 * args.hidden_dim,
                     multiple_of=args.multiple_of,
+                    use_bias=args.bias,
                     dropout=args.dropout,
+                    act_fn=args.act_fn,
+                    lora_args=lora_args,
                 )
         else:
             self.feed_forward = MOElayers(
-                dim=args.dim,
-                hidden_dim=4 * args.dim,
+                hidden_size=args.hidden_dim,
+                intermediate_size=4 * args.hidden_dim,
+                num_total_experts=args.num_total_experts,
+                num_experts_per_tok=args.num_experts_per_tok,
                 multiple_of=args.multiple_of,
+                use_bias=args.bias,
                 dropout=args.dropout,
-                num_total_experts = args.num_total_experts,
-                num_experts_per_tok = args.num_experts_per_tok,
+                act_fn=args.act_fn,
+                lora_args=lora_args,
             )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.attention_norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
+        self.ffn_norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
 
     def forward(self,         
                 hidden_states: torch.Tensor,
@@ -142,28 +151,31 @@ class TransformerBlock(nn.Module):
 class Cybertron(nn.Module):
     last_loss: Optional[torch.Tensor]
 
-    def __init__(self, params: ModelArgs):
+    def __init__(self, 
+                 args: ModelArgs, 
+                 lora_args: LoraArgs = None):
         super().__init__()
-        self.params = params
-        self.vocab_size = params.vocab_size
-        self.bos_id = params.bos_id
-        self.eos_id = params.eos_id
-        self.pad_id = params.pad_id
-        self.n_layers = params.n_layers
+        self.args = args
+        self.lora_args = lora_args
+        self.vocab_size = args.vocab_size
+        self.bos_id = args.bos_id
+        self.eos_id = args.eos_id
+        self.pad_id = args.pad_id
+        self.n_layers = args.n_layers
 
-        self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
-        self.dropout = nn.Dropout(params.dropout)
+        self.tok_embeddings = nn.Embedding(args.vocab_size, args.hidden_dim)
+        self.dropout = nn.Dropout(args.dropout)
         self.layers = torch.nn.ModuleList()
-        for layer_id in range(params.n_layers):
-            self.layers.append(TransformerBlock(layer_id, params))
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
-        self.output = nn.Linear(params.dim, params.vocab_size, bias=False)
+        for layer_id in range(args.n_layers):
+            self.layers.append(TransformerBlock(layer_id, args, lora_args))
+        self.norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
+        self.output = nn.Linear(args.hidden_dim, args.vocab_size, bias=False)
 
         # share the unembedding parameters with the embedding parameters
         self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
 
         # some useful precompute for the RoPE relative positional embeddings
-        freqs_cos, freqs_sin = precompute_freqs_cis(params.dim // params.n_heads, params.max_seq_len)
+        freqs_cos, freqs_sin = precompute_freqs_cis(args.hidden_dim // args.n_heads, args.max_seq_len)
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
@@ -172,7 +184,7 @@ class Cybertron(nn.Module):
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * params.n_layers))
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * args.n_layers))
 
         # Initialize attribute for the loss of the last forward call. This will be set if the forward is called with a targets tensor.
         self.last_loss = None
@@ -315,14 +327,14 @@ class Cybertron(nn.Module):
         ]
         num_decay_params = sum(p.numel() for p in decay_params)
         num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
-        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        print_rank_0(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print_rank_0(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         # Create AdamW optimizer and use the fused version if it is available
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
         use_fused = fused_available and device_type == 'cuda'
         extra_args = dict(fused=True) if use_fused else dict()
         optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
+        print_rank_0(f"using fused AdamW: {use_fused}")
 
         return optimizer
 
@@ -331,7 +343,7 @@ class Cybertron(nn.Module):
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = sum(p.numel() for p in self.parameters())
-        cfg = self.params
+        cfg = self.args
         L, H, Q, T = cfg.n_layers, cfg.n_heads, cfg.dim//cfg.n_heads, cfg.max_seq_len
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
@@ -357,12 +369,12 @@ class Cybertron(nn.Module):
         """
         Take a conditioning sequence of indices tokens (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        Most likely you'll want to make sure to be in set_model_eval(model) mode of operation for this.
         Also note this is a super inefficient version of sampling with no key/value cache.
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            token_cond = input_ids if input_ids.size(1) <= self.params.max_seq_len else input_ids[:, -self.params.max_seq_len:]
+            token_cond = input_ids if input_ids.size(1) <= self.args.max_seq_len else input_ids[:, -self.args.max_seq_len:]
             # forward the model to get the logits for the index in the sequence
             outputs = self(token_cond, return_qk_head_hetmaps=return_qk_head_hetmaps)
 
@@ -401,7 +413,7 @@ class Cybertron(nn.Module):
 
         # first write out the header
         hidden_dim = self.layers[0].feed_forward.w1.weight.shape[0]
-        p = self.params
+        p = self.args
         n_kv_heads = p.n_heads if p.n_kv_heads is None else p.n_kv_heads
         header = struct.pack('iiiiiii', p.dim, hidden_dim, p.n_layers, p.n_heads,
                                        n_kv_heads, p.vocab_size, p.max_seq_len)
@@ -440,4 +452,4 @@ class Cybertron(nn.Module):
 
         # write to binary file
         f.close()
-        print(f"wrote {filepath}")
+        print_rank_0(f"wrote {filepath}")

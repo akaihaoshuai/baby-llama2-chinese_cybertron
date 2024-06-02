@@ -4,6 +4,7 @@ import math
 import torch
 from argparse import ArgumentParser
 from src.utils import *
+from src.model_runner import init_model
 
 
 def main(args):
@@ -11,12 +12,11 @@ def main(args):
     config_file = os.path.join(model_path_dir, 'config.yaml')
     model_config = read_config(config_file)
 
-    model=init_model(model_config, model_path_dir)
+    model, tokenizer = init_model(model_config, model_path_dir)
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
         
     model=model.half().eval().cuda()
-    tokenizer = ChatGLMTokenizer()
     device = next(model.parameters()).device
 
     x = tokenizer.encode(args.prompt, add_special_tokens=False) + [tokenizer.special_tokens['<eos>']]
@@ -28,7 +28,7 @@ def main(args):
 
     generated_text = tokenizer.decode(outputs[0])
     generated_text = generated_text.replace(args.prompt, '')
-    print(f'prompt: {args.prompt}. \nanswer: {generated_text}')
+    print_rank_0(f'prompt: {args.prompt}. \nanswer: {generated_text}')
 
     if args.return_qk_head_hetmaps:
         from src.profile.visualize import display_qk_heatmap_per_head

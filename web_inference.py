@@ -7,7 +7,7 @@ from threading import Thread
 from argparse import ArgumentParser
 import gradio as gr
 from src.utils import *
-
+from src.model_runner import init_model
 
 title = "baby-llama2-chinese for Long-context LLMs"
 
@@ -106,12 +106,11 @@ def main(args):
     config_file = os.path.join(model_path_dir, 'config.yaml')
     model_config = read_config(config_file)
 
-    model=init_model(model_config)
+    model, tokenizer = init_model(model_config)
     if torch.__version__ >= "2" and sys.platform != "win32":
         model = torch.compile(model)
         
     model=model.half().eval().cuda()
-    tokenizer = ChatGLMTokenizer()
     respond = build_generator(model, tokenizer, use_cache=True)
 
     demo = gr.Interface(

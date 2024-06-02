@@ -6,7 +6,8 @@ import numpy
 
 @dataclass
 class ModelArgs:
-    dim: int = 1024
+    architecture: str = 'Cybertron'
+    hidden_dim: int = 1024
     n_layers: int = 16
     n_heads: int = 16
     n_kv_heads: Optional[int] = None
@@ -16,6 +17,7 @@ class ModelArgs:
     max_seq_len: int = 1024
     dropout: float = 0.0
     bias: bool = False
+    act_fn: str = 'silu'
 
     use_moe: bool = False
     num_total_experts: int = 2
@@ -35,6 +37,17 @@ class ModelArgs:
     cache_type : str = 'recent'   # all/recent
     cache_start_size : int = 10
     cache_recent_size : int = 1024
+
+    linear_method : str = 'linear'  # linear
+
+@dataclass
+class LoraArgs:
+    # lora
+    lora_attn_dim: int = 4   # 默认0，则使用full_finetune
+    lora_attn_alpha: int = 128
+    lora_dropout: float = 0.0
+    lora_r_dropout: float = 0.0
+    lora_mudule: str = 'linear'  # linear/embedding/all
 
 
 @dataclass

@@ -10,6 +10,8 @@ import jieba
 from argparse import ArgumentParser
 from src.utils import *
 from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
+from src.utils import *
+from src.model_runner import init_model
 
 
 CEVAL_DATA_PATH = 'data/ceval-exam'
@@ -31,12 +33,12 @@ def compute_bleu(labels, preds, weights=None):
 def eval_medical(model, model_path_dir, tokenizer, benchmark_config, logger):
     answer_list=[]
     predict_lst=[]
-    print(f'*************medical eval*************')
+    print_rank_0(f'*************medical eval*************')
     scores = dict()
 
     ctx = get_ctx(benchmark_config['device'])
     for test_data_path in benchmark_config['test_data_path']:
-        print(f'eval {test_data_path}...')
+        print_rank_0(f'eval {test_data_path}...')
         with open(test_data_path,'r',encoding='utf-8') as f:
             for row in tqdm(f):
                 line=json.loads(row)
@@ -59,15 +61,15 @@ def eval_medical(model, model_path_dir, tokenizer, benchmark_config, logger):
                                                  top_k=benchmark_config['gen_params']['top_k'])
                         predict=tokenizer.decode(outputs[0])
                         predict_lst.append(predict)
-                        # print('\n---------------')
-                        # print('[prompt]:',prompt)
-                        # print('[answer]:',answer)
-                        # print('[predict]:',predict)
+                        # print_rank_0('\n---------------')
+                        # print_rank_0('[prompt]:',prompt)
+                        # print_rank_0('[answer]:',answer)
+                        # print_rank_0('[predict]:',predict)
         
         target_lst=[jieba.lcut(result.lower()) for result in answer_list]
         preds_lst=[jieba.lcut(result.lower()) for result in predict_lst]
         score = compute_bleu(preds_lst, target_lst)*100
-        print(f'{test_data_path}: eval_scores: {score}')
+        print_rank_0(f'{test_data_path}: eval_scores: {score}')
         scores[test_data_path] = score
         logger.info(f'Model: {model_path_dir}. [medical] [{test_data_path}] scores: {score}')
 
@@ -76,7 +78,7 @@ def eval_medical(model, model_path_dir, tokenizer, benchmark_config, logger):
 
 
 def eval_ceval(model, model_path_name, benchmark_dir, tokenizer, benchmark_config, logger):
-    print(f'*************CEval*************')
+    print_rank_0(f'*************CEval*************')
     from src.benchmark.ceval import CEval
     ceval = CEval(model, tokenizer, benchmark_dir, benchmark_config['device'])
     accs, average_acc=ceval.run(CEVAL_DATA_PATH, benchmark_config['gen_params']['shot'])
@@ -86,7 +88,7 @@ def eval_ceval(model, model_path_name, benchmark_dir, tokenizer, benchmark_confi
 
 
 def eval_mmlu(model, model_path_name, benchmark_dir, tokenizer, benchmark_config, logger):
-    print(f'*************MMLU*************')
+    print_rank_0(f'*************MMLU*************')
     from src.benchmark.mmlu import mmlu_eval_func
     cat_cors, weighted_acc=mmlu_eval_func(MMLU_DATA_PATH, 
                                           benchmark_config['gen_params']['shot'], 
@@ -98,7 +100,7 @@ def eval_mmlu(model, model_path_name, benchmark_dir, tokenizer, benchmark_config
 
 
 def eval_longbench(model, model_path_name, benchmark_dir, tokenizer, benchmark_config, logger):
-    print(f'*************LongBench*************')
+    print_rank_0(f'*************LongBench*************')
     from src.benchmark.longbench import longbench_eval_func
     scores, weighted_acc=longbench_eval_func(LONGBENCH_DATA_PATH, benchmark_config, model, tokenizer, benchmark_dir)
     for key in scores:
@@ -111,7 +113,7 @@ def eval_longbench(model, model_path_name, benchmark_dir, tokenizer, benchmark_c
 
 
 def eval_LongEval(model, model_path_name, benchmark_dir, tokenizer, benchmark_config, logger):
-    print(f'*************LongEval*************')
+    print_rank_0(f'*************LongEval*************')
     from src.benchmark.longeval import longeval_eval_func
     scores, weighted_acc=longeval_eval_func(LONGEVAL_DATA_PATH, model, tokenizer, benchmark_dir)
     for key in scores:
@@ -133,7 +135,7 @@ def eval_perplexity(model, model_path_name, benchmark_dir, tokenizer, benchmark_
 
 
 def eval_GSM8K(model, model_path_name, benchmark_dir, tokenizer, benchmark_config, logger):
-    print(f'*************GSM8K*************')
+    print_rank_0(f'*************GSM8K*************')
     from src.benchmark.gsm8k import GSM8K
     gsm8k = GSM8K(model, tokenizer, model_path_name)
     scores, weighted_acc=gsm8k.run(GSM8K_DATA_PATH, benchmark_dir, benchmark_config['gen_params']['shot'])
@@ -150,11 +152,11 @@ def benchmark(model_path_dir, benchmark_config):
 
     config_file = os.path.join(model_path_dir, "config.yaml")
     model_config = read_config(config_file)
-    model = init_model(model_config, model_path_dir)
+    model,_ = init_model(model_config, model_path_dir)
     model = model.half().eval()
     model.to(benchmark_config['device'])
     if benchmark_config['compile']:
-        print("Compiling the model...")
+        print_rank_0("Compiling the model...")
         model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
     benchmark_dir = model_path_dir + '_benchmark'
@@ -177,12 +179,12 @@ def benchmark(model_path_dir, benchmark_config):
 # I/O
 if __name__=="__main__":
     parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer12_dim768_seq768', help="path to config")
     parser.add_argument("--benchmark_file", type=str, default='./config/train.yaml', help="path to config")
     args = parser.parse_args()
     
     model_path_dir = args.model_path if os.path.isdir(args.model_path) else os.path.dirname(args.model_path)
     benchmark_config = read_config(args.benchmark_file)
 
-    print(f'*************benchmark model: {model_path_dir}*************')
+    print_rank_0(f'*************benchmark model: {model_path_dir}*************')
     benchmark(model_path_dir, benchmark_config)

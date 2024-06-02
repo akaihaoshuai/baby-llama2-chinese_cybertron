@@ -2,12 +2,11 @@ import json
 import glob
 import numpy as np
 from tqdm import tqdm
-from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
 import pandas as pd
 import os
-from src.utils import check_is_processed
 from datasets import load_dataset
-from src.utils import get_logger
+from src.utils import *
+from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
 
 
 tokenizer = ChatGLMTokenizer()
@@ -25,13 +24,13 @@ def process_wiki_clean(data_file):
     name = data_file.split('.')[0]
     data_dir_path = os.path.join(os.path.join(DATA_PATH, PRETRAINED_DATA_PATH), name)
     if check_is_processed(data_dir_path):
-        print(f'[INFO] {data_file} has processed .')
+        print_rank_0(f'[INFO] {data_file} has processed .')
         return
     
     data_path = os.path.join(DATA_PATH, data_file)
     if not os.path.exists(data_path):
-        print(f'No exist data_file: {data_file}')
-        print('download data from url: https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered.')
+        print_rank_0(f'No exist data_file: {data_file}')
+        print_rank_0('download data from url: https://huggingface.co/datasets/pleisto/wikipedia-cn-20230720-filtered.')
         # traindata = load_dataset("pleisto/wikipedia-cn-20230720-filtered", "wikipedia-cn-20230720-filtered", split="train")
         return
     else:
@@ -66,7 +65,7 @@ def process_wiki_clean(data_file):
             f2.write(arr.tobytes())
         batch_cnt += 1
 
-    print(f'processed {data_file} tokens: {total_id_len}')
+    print_rank_0(f'processed {data_file} tokens: {total_id_len}')
     logger.info(f'processed {data_file} tokens: {total_id_len}')
 
 
@@ -74,13 +73,13 @@ def process_baidu(data_file):
     name = data_file.split('.')[0]
     data_dir_path = os.path.join(os.path.join(DATA_PATH, PRETRAINED_DATA_PATH), name)
     if check_is_processed(data_dir_path):
-        print(f'[INFO] {data_file} has processed .')
+        print_rank_0(f'[INFO] {data_file} has processed .')
         return
     
     data_path = os.path.join(DATA_PATH, data_file)
     if not os.path.exists(data_path):
-        print(f'No exist data_file: {data_file}')
-        print('download data from url: https://huggingface.co/datasets/xuqinyang/BaiduBaike-5.63M/blob/main/563w_baidubaike.json.')
+        print_rank_0(f'No exist data_file: {data_file}')
+        print_rank_0('download data from url: https://huggingface.co/datasets/xuqinyang/BaiduBaike-5.63M/blob/main/563w_baidubaike.json.')
         return
     
     batch_cnt=0
@@ -124,7 +123,7 @@ def process_baidu(data_file):
             f2.write(arr.tobytes())
         batch_cnt += 1
     
-    print(f'processed {data_file} tokens: {total_id_len}')
+    print_rank_0(f'processed {data_file} tokens: {total_id_len}')
     logger.info(f'processed {data_file} tokens: {total_id_len}')
 
 
@@ -133,13 +132,13 @@ def process_medical(data_file):
     name = data_file.split('.')[0]
     data_dir_path = os.path.join(os.path.join(DATA_PATH, PRETRAINED_DATA_PATH), name)
     if check_is_processed(data_dir_path):
-        print(f'[INFO] {data_file} has processed .')
+        print_rank_0(f'[INFO] {data_file} has processed .')
         return
     
     data_path = os.path.join(DATA_PATH, data_file)
     if not os.path.exists(data_path):
-        print(f'No exist data_file: {data_file}')
-        print('download data from url: https://huggingface.co/datasets/shibing624/medical.')
+        print_rank_0(f'No exist data_file: {data_file}')
+        print_rank_0('download data from url: https://huggingface.co/datasets/shibing624/medical.')
         return
     
     batch_cnt=0
@@ -175,7 +174,7 @@ def process_medical(data_file):
             f2.write(arr.tobytes())
         batch_cnt += 1
     
-    print(f'processed {data_file} tokens: {total_id_len}')
+    print_rank_0(f'processed {data_file} tokens: {total_id_len}')
     logger.info(f'processed {data_file} tokens: {total_id_len}')
 
 
@@ -183,13 +182,13 @@ def process_c4(data_file):
     name = data_file.split('.')[0]
     data_dir_path = os.path.join(os.path.join(DATA_PATH, PRETRAINED_DATA_PATH), name)
     if check_is_processed(data_dir_path):
-        print(f'[INFO] {data_file} has processed .')
+        print_rank_0(f'[INFO] {data_file} has processed .')
         return
     
     data_path = os.path.join(DATA_PATH, data_file)
     if not os.path.exists(data_path):
-        print(f'No exist data_file: {data_file}')
-        print('download data from url: https://github.com/DLLXW/baby-llama2-chinese.')
+        print_rank_0(f'No exist data_file: {data_file}')
+        print_rank_0('download data from url: https://github.com/DLLXW/baby-llama2-chinese.')
         return
     
     batch_cnt=0
@@ -200,7 +199,7 @@ def process_c4(data_file):
 
     c4_zh_paths = glob.glob(data_path)
     c4_zh_paths=sorted(c4_zh_paths)
-    print(len(c4_zh_paths))
+    print_rank_0(len(c4_zh_paths))
 
     doc_ids=[]
     for per in tqdm(c4_zh_paths):
@@ -227,7 +226,7 @@ def process_c4(data_file):
             f2.write(arr.tobytes())
         batch_cnt += 1
     
-    print(f'processed {data_file} tokens: {total_id_len}')
+    print_rank_0(f'processed {data_file} tokens: {total_id_len}')
     logger.info(f'processed {data_file} tokens: {total_id_len}')
 
 
@@ -236,13 +235,13 @@ def process_wudao(data_file):
     name = data_file.split('.')[0]
     data_dir_path = os.path.join(os.path.join(DATA_PATH, PRETRAINED_DATA_PATH), name)
     if check_is_processed(data_dir_path):
-        print(f'[INFO] {data_file} has processed .')
+        print_rank_0(f'[INFO] {data_file} has processed .')
         return
     
     data_path = os.path.join(DATA_PATH, data_file)
     if not os.path.exists(data_path):
-        print(f'No exist data_file: {data_file}')
-        print('download data from url: https://data.baai.ac.cn/details/WuDaoCorporaText.')
+        print_rank_0(f'No exist data_file: {data_file}')
+        print_rank_0('download data from url: https://data.baai.ac.cn/details/WuDaoCorporaText.')
         return
     
     batch_cnt=0
@@ -253,7 +252,7 @@ def process_wudao(data_file):
 
     wudao_zh_paths = glob.glob(data_path)
     wudao_zh_paths=sorted(wudao_zh_paths)
-    print(len(wudao_zh_paths))#很多子文件
+    print_rank_0(len(wudao_zh_paths))#很多子文件
 
     doc_ids=[]
     for per in tqdm(wudao_zh_paths[320:]):#wudao_zh_paths[i:j]手动分片，一片片处理，不然太大一次性处理不完
@@ -280,7 +279,7 @@ def process_wudao(data_file):
             f2.write(arr.tobytes())
         batch_cnt += 1
     
-    print(f'processed {data_file} tokens: {total_id_len}')
+    print_rank_0(f'processed {data_file} tokens: {total_id_len}')
     logger.info(f'processed {data_file} tokens: {total_id_len}')
 
 
@@ -297,13 +296,13 @@ def collect_all_pretrain_data():
                 pretrain_data_bin_paths.append(os.path.join(abs_data_dir, bin_name))
 
     if len(pretrain_data_bin_paths)==0:
-        print(f'no bin data find in {pretrain_data_dir}')
+        print_rank_0(f'no bin data find in {pretrain_data_dir}')
         return
 
-    print('concat pretrain_data.')
+    print_rank_0('concat pretrain_data.')
     token_num = 0
     for idx, data_file in enumerate(pretrain_data_bin_paths):
-        print(f'[{idx}/{len(pretrain_data_bin_paths)}] read data: {data_file}')
+        print_rank_0(f'[{idx}/{len(pretrain_data_bin_paths)}] read data: {data_file}')
         with open(data_file, 'rb') as f:
             data = np.fromfile(f, dtype=np.uint16)
 
@@ -313,8 +312,8 @@ def collect_all_pretrain_data():
             token_num += data.shape[0]
             del data
 
-    print(f'tokens: {token_num/1024/1024} M')
-    print('finished.')
+    print_rank_0(f'tokens: {token_num/1024/1024} M')
+    print_rank_0('finished.')
 
 
 def sft_to_pretrain():
@@ -326,9 +325,9 @@ def sft_to_pretrain():
         q_id = tokenizer.encode(q,add_special_tokens=False)
         a_id = tokenizer.encode(a,add_special_tokens=False)
         #
-        print(q)
-        print(a)
-        print('-----')
+        print_rank_0(q)
+        print_rank_0(a)
+        print_rank_0('-----')
         text_id=q_id+a_id+[tokenizer.special_tokens['<eos>']]
         if len(text_id) > GLOBAL_MIN_LEN:
             doc_ids+=text_id
@@ -397,7 +396,7 @@ def sft_to_pretrain():
                 doc_ids+=text_id
 
     arr = np.array(doc_ids,dtype=np.uint16)
-    print(arr.shape)
+    print_rank_0(arr.shape)
     with open('./data/medical_qa.bin','wb') as f:
         f.write(arr.tobytes())
 

@@ -1,4 +1,5 @@
 import torch
+from src.utils import *
 
 
 def slice2d(x, start, end):
@@ -28,7 +29,7 @@ class StartRecentKVCache:
         k_seq_dim=2,
         v_seq_dim=2,
     ):
-        print(f"StartRecentKVCache: {start_size}, {recent_size}")
+        print_rank_0(f"StartRecentKVCache: {start_size}, {recent_size}")
         self.start_size = start_size
         self.recent_size = recent_size
         self.cache_size = start_size + recent_size

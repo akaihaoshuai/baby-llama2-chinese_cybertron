@@ -2,19 +2,20 @@ import glob
 import os
 
 from tqdm import  tqdm
+from src.utils import *
 
 def collect_data(merge_txt_list,merged_txt_path):
     corpus=open(merged_txt_path,'w',encoding='utf-8')
     cnt=0
     for idx, file in enumerate(merge_txt_list):
-        print(f'[{idx}/{len(merge_txt_list)}] open {file}...')
+        print_rank_0(f'[{idx}/{len(merge_txt_list)}] open {file}...')
         with open(file,'r',encoding='utf-8') as f:
             for line in tqdm(f.readlines()):
-                # print(line.strip())
+                # print_rank_0(line.strip())
                 if len(line.strip())>50:
                     corpus.write(line.strip()+'\n')
                     cnt+=1
-    print(cnt)
+    print_rank_0(cnt)
     # 9853042
     corpus.close()
 
@@ -74,7 +75,7 @@ def train_tokenizer(merged_txt_path,tokenizer_name):
       normalization_rule_tsv: 
     }
     """
-    print(f'[tokenizer] train...')
+    print_rank_0(f'[tokenizer] train...')
 
     start_time = time.time()
     spm.SentencePieceTrainer.train(
@@ -96,9 +97,9 @@ def train_tokenizer(merged_txt_path,tokenizer_name):
     )
 
     end_time = time.time()
-    print(f'[tokenizer] train time: {end_time - start_time}')
+    print_rank_0(f'[tokenizer] train time: {end_time - start_time}')
 
-    print(f'[tokenizer] test...')
+    print_rank_0(f'[tokenizer] test...')
     sp_model = spm.SentencePieceProcessor()
     sp_model.load(f'{tokenizer_name}.model')
     text = """
@@ -108,14 +109,14 @@ def train_tokenizer(merged_txt_path,tokenizer_name):
     pieces_list = sp_model.encode_as_pieces(text)
     ids_list = sp_model.encode_as_ids(text)
     # encode: text => id
-    print(pieces_list)
-    print(ids_list)
+    print_rank_0(pieces_list)
+    print_rank_0(ids_list)
 
     # decode: id => text
-    # print(sp.decode_pieces(['▁This', '▁is', '▁a', '▁t', 'est', 'ly']))
-    # print(sp.decode_ids([209, 31, 9, 375, 586, 34]))
-    print(sp_model.decode_pieces([pieces_list]))
-    print(sp_model.decode_ids([ids_list]))
+    # print_rank_0(sp.decode_pieces(['▁This', '▁is', '▁a', '▁t', 'est', 'ly']))
+    # print_rank_0(sp.decode_ids([209, 31, 9, 375, 586, 34]))
+    print_rank_0(sp_model.decode_pieces([pieces_list]))
+    print_rank_0(sp_model.decode_ids([ids_list]))
 
 
 def merge_tokenizers(llama_tokenizer, chinese_sp_model):
@@ -132,15 +133,15 @@ def merge_tokenizers(llama_tokenizer, chinese_sp_model):
     chinese_spm.ParseFromString(chinese_sp_model.serialized_model_proto())
 
     # print number of tokens
-    print(len(llama_tokenizer),len(chinese_sp_model))
-    print(llama_tokenizer.all_special_tokens)
-    print(llama_tokenizer.all_special_ids)
-    print(llama_tokenizer.special_tokens_map)
+    print_rank_0(len(llama_tokenizer),len(chinese_sp_model))
+    print_rank_0(llama_tokenizer.all_special_tokens)
+    print_rank_0(llama_tokenizer.all_special_ids)
+    print_rank_0(llama_tokenizer.special_tokens_map)
 
     ## Add Chinese tokens to LLaMA tokenizer
     llama_spm_tokens_set = set(p.piece for p in llama_spm.pieces)
-    print(len(llama_spm_tokens_set))
-    print(f"Before:{len(llama_spm_tokens_set)}")
+    print_rank_0(len(llama_spm_tokens_set))
+    print_rank_0(f"Before:{len(llama_spm_tokens_set)}")
     for p in chinese_spm.pieces:
         piece = p.piece
         if piece not in llama_spm_tokens_set:
@@ -148,7 +149,7 @@ def merge_tokenizers(llama_tokenizer, chinese_sp_model):
             new_p.piece = piece
             new_p.score = 0
             llama_spm.pieces.append(new_p)  # 将训练的分词模型追加新的token到之前的模型
-    print(f"New model pieces: {len(llama_spm.pieces)}")
+    print_rank_0(f"New model pieces: {len(llama_spm.pieces)}")
 
     ## Save
     model_file = 'tokenizer.model'
@@ -160,26 +161,26 @@ def merge_tokenizers(llama_tokenizer, chinese_sp_model):
 
     tokenizer = LlamaTokenizer(vocab_file=output_sp_dir + f'/{model_file}')
     tokenizer.save_pretrained(output_hf_dir)
-    print(f"Chinese-LLaMA tokenizer has been saved to {output_hf_dir}")
+    print_rank_0(f"Chinese-LLaMA tokenizer has been saved to {output_hf_dir}")
 
     # Test
     # llama_tokenizer = LlamaTokenizer.from_pretrained(llama_tokenizer_dir)
     merged_tokenizer = LlamaTokenizer.from_pretrained(output_hf_dir)
-    print(merged_tokenizer.all_special_tokens)
-    print(merged_tokenizer.all_special_ids)
-    print(merged_tokenizer.special_tokens_map)
+    print_rank_0(merged_tokenizer.all_special_tokens)
+    print_rank_0(merged_tokenizer.all_special_ids)
+    print_rank_0(merged_tokenizer.special_tokens_map)
     text = '''白日依山尽，黄河入海流。欲穷千里目，更上一层楼。'''
     text = '''大模型是指具有非常大的参数数量的人工神经网络模型。 在深度学习领域，大模型通常是指具有数亿到数万亿参数的模型。'''
-    print("Test text:\n", text)
-    print(f"Tokenized by LLaMA tokenizer:{len(llama_tokenizer.tokenize(text))},{llama_tokenizer.tokenize(text)}")
-    print(f"Tokenized by merged tokenizer:{len(merged_tokenizer.tokenize(text))},{merged_tokenizer.tokenize(text)}")
+    print_rank_0("Test text:\n", text)
+    print_rank_0(f"Tokenized by LLaMA tokenizer:{len(llama_tokenizer.tokenize(text))},{llama_tokenizer.tokenize(text)}")
+    print_rank_0(f"Tokenized by merged tokenizer:{len(merged_tokenizer.tokenize(text))},{merged_tokenizer.tokenize(text)}")
 
 def eval_tokenizer(tokenizer,txt_file_path,res_csv_path):
     # tokenizer = LlamaTokenizer.from_pretrained('merged_tokenizer_hf_60k')
     # llama_tokenizer = LlamaTokenizer.from_pretrained('llama')
-    print(f'[tokenizer] eval...')
+    print_rank_0(f'[tokenizer] eval...')
 
-    print(tokenizer)
+    print_rank_0(tokenizer)
 
     num_tokens = []
     num_ids = []
@@ -188,8 +189,8 @@ def eval_tokenizer(tokenizer,txt_file_path,res_csv_path):
         for line in tqdm(f.readlines()):
             line = line.strip()
             encode = tokenizer(line)
-            # print(encode)
-            # print(len(line),len(encode['input_ids']))
+            # print_rank_0(encode)
+            # print_rank_0(len(line),len(encode['input_ids']))
             num_tokens.append(len(line))
             num_ids.append(len(encode['input_ids']))
 
@@ -200,7 +201,7 @@ def eval_tokenizer(tokenizer,txt_file_path,res_csv_path):
 
     data = pd.read_csv(res_csv_path)
     data['raw_ratio'] = data['num_tokens'] / data['num_ids']
-    print(data.describe(percentiles=[0.3, 0.8]))
+    print_rank_0(data.describe(percentiles=[0.3, 0.8]))
     data.describe(percentiles=[0.3, 0.8]).to_excel(res_csv_path.replace('.csv', '.xlsx'),index=True)
 
 

@@ -7,7 +7,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from src.data.dataset_pretrain import PretrainDataset
 from src.utils import *
-
+from src.model_runner import init_model, eval_model, set_model_eval, set_model_train
 
 def train_epoch(epoch, pretrain_config, master_process):
     start_time=time.time()
@@ -35,7 +35,7 @@ def train_epoch(epoch, pretrain_config, master_process):
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
-        #
+        
         if (step + 1) % pretrain_config['grad_accum_steps'] == 0:
             # clip the gradient
             if pretrain_config['train_params']['grad_clip'] != 0.0:
@@ -48,10 +48,10 @@ def train_epoch(epoch, pretrain_config, master_process):
             optimizer.zero_grad(set_to_none=True)
 
         #打印日志
-        if step % pretrain_config['log_interval'] == 0 and master_process:
-            model.eval()
+        if step > 0 and step % pretrain_config['log_interval'] == 0 and master_process:
+            set_model_eval(model)
             eval_model(raw_model, ctx)
-            model.train()
+            set_model_train(model)
 
             spend_time=time.time()-start_time
             logger.info(
@@ -64,23 +64,23 @@ def train_epoch(epoch, pretrain_config, master_process):
                         optimizer.param_groups[-1]['lr'],
                         spend_time / (step+1) * iter_per_epoch // 60 - spend_time // 60))
         #
-        if step % pretrain_config['save_interval'] == 0 and master_process:
-            model.eval()
+        if step > 0 and step % pretrain_config['save_interval'] == 0 and master_process:
+            set_model_eval(model)
             torch.save(raw_model.state_dict(),'{}/iter_{}.pth'.format(save_dir,int(step+epoch*iter_per_epoch)))
-            model.train()
+            set_model_train(model)
 
 # @torch.no_grad()
 # def valid_epoch(epoch):
 #     global best_val_loss
 #     losses = []
-#     model.eval()
+#     set_model_eval(model)
 #     for _, (X, Y) in enumerate(val_loader):
 #         X=X.to(device)
 #         Y=Y.to(device)
 #         with ctx:
 #             logits, loss = model(X, Y)
 #         losses.append(loss.item())
-#     model.train()
+#     set_model_train(model)
 #     val_loss=np.mean(losses)
 #     #
 #     logger.info('valid loss = {:.4f}'.format(val_loss))
@@ -103,7 +103,7 @@ if __name__=="__main__":
     pretrain_config = read_config(args.pretrain_file)
 
     save_dir =os.path.join(pretrain_config['out_dir'], 
-                           f'pretrain_layer{model_config["n_layers"]}_dim{model_config["dim"]}_seq{model_config["max_seq_len"]}')
+                           f'pretrain_layer{model_config["n_layers"]}_dim{model_config["hidden_dim"]}_seq{model_config["max_seq_len"]}')
     
     os.makedirs(save_dir, exist_ok=True)
     
@@ -121,8 +121,8 @@ if __name__=="__main__":
 
     tokens_per_iter = pretrain_config['grad_accum_steps'] * ddp_world_size * pretrain_config['batch_size'] * model_config['max_seq_len']
     if master_process:
-        print(f"tokens per iteration will be: {tokens_per_iter:,}")
-        print(f"breaks down as: {pretrain_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {pretrain_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
+        print_rank_0(f"tokens per iteration will be: {tokens_per_iter:,}")
+        print_rank_0(f"breaks down as: {pretrain_config['grad_accum_steps']} grad accum steps * {ddp_world_size} processes * {pretrain_config['batch_size']} batch size * {model_config['max_seq_len']} max seq len")
         os.makedirs(pretrain_config['out_dir'], exist_ok=True)
 
     device_type = "cuda" if "cuda" in device else "cpu"  # for later use in torch.autocast
@@ -132,8 +132,43 @@ if __name__=="__main__":
     
     best_val_loss = 1e9
     
-    #-----init dataloader------
-    train_ds = PretrainDataset(pretrain_config['train_data_path'], max_length=model_config['max_seq_len'],memmap=True)
+    #init model
+    model, _ = init_model(model_config)
+    model.to(device)
+    set_model_train(model)
+    print_rank_0('***************model****************')
+    print_rank_0(model)
+
+    
+    # initialize a GradScaler. If enabled=False scaler is a no-op
+    scaler = torch.cuda.amp.GradScaler(enabled=(pretrain_config['dtype'] == 'float16'))
+    # optimizer
+    optimizer = model.configure_optimizers(pretrain_config['train_params']['weight_decay'], 
+                                           pretrain_config['train_params']['lr'], 
+                                           (pretrain_config['train_params']['beta1'], 
+                                            pretrain_config['train_params']['beta2']), 
+                                            device_type)
+    
+    # compile the model
+    if pretrain_config['compile']:
+        print_rank_0("compiling the model... (takes a ~minute)")
+        unoptimized_model = model
+        model = torch.compile(model) # requires PyTorch 2.0
+    # wrap model into DDP container
+    if ddp:
+        # Ignore the `freqs_cis` buffer so that DDP does not broadcast it at
+        # construction time since NCCL does not support `ComplexFloat`
+        prefix = "_orig_mod." if compile else ""
+        model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
+        model = DDP(model, device_ids=[ddp_local_rank])
+        
+    raw_model = model.module if ddp else model # unwrap DDP container if needed
+
+
+     #-----init dataloader------
+    train_ds = PretrainDataset(pretrain_config['train_data_path'], 
+                               max_length=model_config['max_seq_len'],
+                               memmap=True)
 
     if ddp:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
@@ -158,31 +193,7 @@ if __name__=="__main__":
     #     shuffle=False,        
     #     num_workers=0,
     # )
-    #init model
-    model=init_model(model_config)
-    model.to(device)
-    # initialize a GradScaler. If enabled=False scaler is a no-op
-    scaler = torch.cuda.amp.GradScaler(enabled=(pretrain_config['dtype'] == 'float16'))
-    # optimizer
-    optimizer = model.configure_optimizers(pretrain_config['train_params']['weight_decay'], 
-                                           pretrain_config['train_params']['lr'], 
-                                           (pretrain_config['train_params']['beta1'], 
-                                            pretrain_config['train_params']['beta2']), 
-                                            device_type)
-    # compile the model
-    if pretrain_config['compile']:
-        print("compiling the model... (takes a ~minute)")
-        unoptimized_model = model
-        model = torch.compile(model) # requires PyTorch 2.0
-    # wrap model into DDP container
-    if ddp:
-        # Ignore the `freqs_cis` buffer so that DDP does not broadcast it at
-        # construction time since NCCL does not support `ComplexFloat`
-        prefix = "_orig_mod." if compile else ""
-        model._ddp_params_and_buffers_to_ignore = {prefix + "freqs_cis"}
-        model = DDP(model, device_ids=[ddp_local_rank])
-        
-    raw_model = model.module if ddp else model # unwrap DDP container if needed
+
     # training loop
     iter_per_epoch=len(train_loader)
     for epoch in range(pretrain_config['max_epoch']):

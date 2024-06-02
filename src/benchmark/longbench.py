@@ -5,7 +5,7 @@ import numpy as np
 import random
 from tqdm import tqdm
 import jsonlines
-from src.utils import get_ctx
+from src.utils import *
 
 from src.benchmark.metrics import (
     qa_f1_score,
@@ -129,7 +129,7 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
         x = (torch.tensor(x, dtype=torch.long, device=device)[None, ...])
 
         context_length = x.shape[-1]
-        # print(f'=========length: {context_length}. =========')
+        # print_rank_0(f'=========length: {context_length}. =========')
 
         with ctx:
             y = model.generate(x, max_new_tokens=max_gen)[0]
@@ -211,7 +211,7 @@ def longbench_eval_func(data_path, benchmark_config, model, tokenizer, benchmark
         else:
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
-        print(f"LongBench {dataset} accuracy: {score}")
+        print_rank_0(f"LongBench {dataset} accuracy: {score}")
 
     sum_scores={'0-4k': 0, '4-8k': 0, '8k+': 0}
     for key in scores.keys():
@@ -219,9 +219,9 @@ def longbench_eval_func(data_path, benchmark_config, model, tokenizer, benchmark
         sum_scores['4-8k'] += scores[key]['4-8k'] / len(scores)
         sum_scores['8k+']  += scores[key]['8k+']  / len(scores)
 
-    print("LongBench Average accuracy '0-4k': {:.3f}".format(sum_scores['0-4k']))
-    print("LongBench Average accuracy '4-8k': {:.3f}".format(sum_scores['4-8k']))
-    print("LongBench Average accuracy '8k+' : {:.3f}".format(sum_scores['8k+']))
+    print_rank_0("LongBench Average accuracy '0-4k': {:.3f}".format(sum_scores['0-4k']))
+    print_rank_0("LongBench Average accuracy '4-8k': {:.3f}".format(sum_scores['4-8k']))
+    print_rank_0("LongBench Average accuracy '8k+' : {:.3f}".format(sum_scores['8k+']))
 
     return scores, sum_scores
     

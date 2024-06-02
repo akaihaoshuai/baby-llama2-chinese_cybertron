@@ -6,6 +6,7 @@ import pandas as pd
 from tqdm import tqdm
 import numpy as np
 from datasets import load_dataset
+from src.utils import *
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -89,8 +90,8 @@ class CEval:
 
         # run all task
         for task_name in self.TASK2DESC:
-            print("================================================================")
-            print(f"run task: {task_name}")
+            print_rank_0("================================================================")
+            print_rank_0(f"run task: {task_name}")
             result, acc = self.run_single_task(data_path, task_name, shot)
             results[task_name] = result
             accs[task_name] = acc
@@ -98,7 +99,7 @@ class CEval:
             result_path = os.path.join(ceval_dir_name, f"{task_name}.json")
             with open(result_path, "w") as f:
                 json.dump(result, f, indent=2)
-            print(f"save result to {result_path}")
+            print_rank_0(f"save result to {result_path}")
 
         average_acc = sum(accs.values()) / len(accs)
         accs['average'] = average_acc
@@ -107,7 +108,7 @@ class CEval:
         acc_path = os.path.join(ceval_dir_name, "ceval_acc.json")
         with open(acc_path, "w") as f:
             json.dump(accs, f, indent=2)
-        print(f"Ceval average acc: {average_acc}\n")
+        print_rank_0(f"Ceval average acc: {average_acc}\n")
 
         return accs, average_acc
 
@@ -131,7 +132,7 @@ class CEval:
 
                 dataset[name] = questions
         else:
-            print(f'file no existed. load_dataset from huggingface: {self.DATA_PATH}')
+            print_rank_0(f'file no existed. load_dataset from huggingface: {self.DATA_PATH}')
             dataset = load_dataset(self.DATA_PATH, task_name)
 
         # tmp_ = dataset[split]

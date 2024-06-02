@@ -7,70 +7,17 @@ import math
 from contextlib import nullcontext
 from torch.distributed import init_process_group
 
-from src.models.model_args import ModelArgs
-from src.models.cybertron import Cybertron
-from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
 
-
-def init_model(model_config=None, model_path=None, tokenizer=None):
-    # model init
-    if model_path is None:
-        # init a new model from scratch
-        print("Initializing a new model from scratch")
-        model_args = ModelArgs(**model_config) if model_config is not None else ModelArgs()
-        if tokenizer is None:
-             tokenizer = ChatGLMTokenizer()
-        
-        model_args.bos_id = tokenizer.tokenizer.bos_id
-        model_args.eos_id = tokenizer.tokenizer.eos_id
-        model_args.pad_id = tokenizer.tokenizer.pad_id
-        model = Cybertron(model_args)
+def print_rank_0(message: str) -> None:
+    """If distributed is initialized, print only on rank 0."""
+    if torch.distributed.is_initialized():
+        if torch.distributed.get_rank() == 0:
+            print(message, flush=True)
     else:
-        # resume training from a checkpoint.
-        model_path_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_path)
-        epoch_bin_path_list = [sub_path for sub_path in os.listdir(model_path_dir) if 'epoch' in sub_path]
+        print(message, flush=True)
         
-        max_epoch = -1
-        for bin_path in epoch_bin_path_list:
-            epoch_num = int(bin_path.split('_')[-1].split('.')[0])
-            if max_epoch < epoch_num:
-                 max_epoch = epoch_num
-        
-        ckpt_path = os.path.join(model_path, f'epoch_{max_epoch}.pth')
-        print(f'load model from path: {ckpt_path}.')
 
-        checkpoint = torch.load(ckpt_path, map_location='cpu')
-        if 'model_config' in checkpoint:
-            checkpoint_model_config = checkpoint["model_config"]
-            # force these config attributes to be equal otherwise we can't even resume training
-            # the rest of the attributes (e.g. dropout) can stay as desired from command line
-            for k in ["dim", "n_layers", "n_heads", "n_kv_heads", "vocab_size", "multiple_of", "max_seq_len"]:
-                model_config[k] = checkpoint_model_config[k]
 
-        # create the model
-        model_args = ModelArgs(**model_config) if model_config is not None else ModelArgs()
-        if tokenizer is None:
-             tokenizer = ChatGLMTokenizer()
-        
-        model_args.bos_id = tokenizer.tokenizer.bos_id
-        model_args.eos_id = tokenizer.tokenizer.eos_id
-        model_args.pad_id = tokenizer.tokenizer.pad_id
-        model = Cybertron(model_args)
-
-        if 'model' in checkpoint:
-            state_dict = checkpoint["model"]
-        else:
-            state_dict = checkpoint
-
-        # fix the keys of the state dictionary :(
-        # honestly no idea how checkpoints sometimes get this prefix, have to debug more
-        unwanted_prefix = "_orig_mod."
-        for k, v in list(state_dict.items()):
-            if k.startswith(unwanted_prefix):
-                state_dict[k[len(unwanted_prefix) :]] = state_dict.pop(k)
-        model.load_state_dict(state_dict)
-
-    return model
 
 def init_ddp(ddp, device):
     if ddp:
@@ -129,37 +76,6 @@ def get_lr(it, params):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return params['min_lr'] + coeff * (params['lr'] - params['min_lr'])
 
-
-
-def eval_model(model, ctx=None):
-    from src.chatglm_tokenizer.tokenization_chatglm import ChatGLMTokenizer
-    tokenizer=ChatGLMTokenizer()
-
-    model.eval()
-    device = next(model.parameters()).device
-
-    data = [
-        {"question": "最近我在办公室坐久了会感到头晕，请问这是什么原因?有什么缓解办法吗？", "target": ""},
-        # {"question": "前列腺囊肿的症状是什么？", "target": ""},
-        # {"question": "请问，世界上最大的动物是什么？", "target": ""},
-    ]
-    if ctx is None:
-         ctx = get_ctx(device)
-
-    for p in data:
-        # run generation
-        prompt=p['question']
-        x=tokenizer.encode(prompt,add_special_tokens=False)+[tokenizer.special_tokens['<bos>']]
-        x = (torch.tensor(x, dtype=torch.long, device=device)[None, ...])
-        target = p['target']
-        with torch.no_grad():
-            with ctx:
-                y = model.generate(x)
-                answer=tokenizer.decode(y[0])
-                answer=answer.replace(prompt,'')
-                print('[prompt]:',prompt)
-                print('[answer]:',answer)
-                print('---------------')
 
 
 def get_logger(filename, verbosity=1, name=None):

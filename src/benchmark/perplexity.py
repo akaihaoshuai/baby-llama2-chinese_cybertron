@@ -21,6 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import evaluate
 from evaluate import logging
+from src.utils import print_rank_0
 
 
 _CITATION = """\
@@ -61,11 +62,11 @@ Examples:
         >>> results = perplexity.compute(model_id='gpt2',
         ...                              add_start_token=False,
         ...                              predictions=input_texts) # doctest:+ELLIPSIS
-        >>> print(list(results.keys()))
+        >>> print_rank_0(list(results.keys()))
         ['perplexities', 'mean_perplexity']
-        >>> print(round(results["mean_perplexity"], 0))
+        >>> print_rank_0(round(results["mean_perplexity"], 0))
         647.0
-        >>> print(round(results["perplexities"][0], 0))
+        >>> print_rank_0(round(results["perplexities"][0], 0))
         32.0
 
     Example 2:
@@ -75,11 +76,11 @@ Examples:
         >>> input_texts = [s for s in input_texts if s!='']
         >>> results = perplexity.compute(model_id='gpt2',
         ...                              predictions=input_texts)
-        >>> print(list(results.keys()))
+        >>> print_rank_0(list(results.keys()))
         ['perplexities', 'mean_perplexity']
-        >>> print(round(results["mean_perplexity"], 2)) # doctest: +SKIP
+        >>> print_rank_0(round(results["mean_perplexity"], 2)) # doctest: +SKIP
         576.76
-        >>> print(round(results["perplexities"][0], 2)) # doctest: +SKIP
+        >>> print_rank_0(round(results["perplexities"][0], 2)) # doctest: +SKIP
         889.28
 """
 

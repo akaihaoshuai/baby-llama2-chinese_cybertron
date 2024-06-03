@@ -94,12 +94,13 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, 
                  args: ModelArgs, 
-                 lora_args: LoraArgs = None):
+                 lora_args: LoraArgs = None,
+                 flag: str = 'train'):  # train/fft/lora/dora etc
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.hidden_dim
         self.head_dim = args.hidden_dim // args.n_heads
-        self.attention = Attention(args, lora_args)
+        self.attention = Attention(args, lora_args, flag)
 
         if not args.use_moe:
             self.feed_forward = FeedForward(
@@ -110,6 +111,7 @@ class TransformerBlock(nn.Module):
                     dropout=args.dropout,
                     act_fn=args.act_fn,
                     lora_args=lora_args,
+                    flag=flag,
                 )
         else:
             self.feed_forward = MOElayers(
@@ -122,6 +124,7 @@ class TransformerBlock(nn.Module):
                 dropout=args.dropout,
                 act_fn=args.act_fn,
                 lora_args=lora_args,
+                flag=flag,
             )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
@@ -153,9 +156,11 @@ class Cybertron(nn.Module):
 
     def __init__(self, 
                  args: ModelArgs, 
-                 lora_args: LoraArgs = None):
+                 lora_args: LoraArgs = None,
+                 flag: str = 'train'):  # train/fft/lora/dora etc
         super().__init__()
         self.args = args
+        self.flag = flag
         self.lora_args = lora_args
         self.vocab_size = args.vocab_size
         self.bos_id = args.bos_id
@@ -167,7 +172,7 @@ class Cybertron(nn.Module):
         self.dropout = nn.Dropout(args.dropout)
         self.layers = torch.nn.ModuleList()
         for layer_id in range(args.n_layers):
-            self.layers.append(TransformerBlock(layer_id, args, lora_args))
+            self.layers.append(TransformerBlock(layer_id, args, lora_args, flag))
         self.norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
         self.output = nn.Linear(args.hidden_dim, args.vocab_size, bias=False)
 

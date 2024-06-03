@@ -55,7 +55,7 @@ def train_epoch(epoch, sft_config, master_process):
         optimizer.zero_grad(set_to_none=True)
 
         #打印日志
-        if step > 0 and step % sft_config['log_interval'] == 0 and master_process:
+        if step % sft_config['log_interval'] == 0 and master_process:
             set_model_eval(model)
             eval_model(raw_model, ctx)
             set_model_train(model)
@@ -98,7 +98,7 @@ def valid_epoch(epoch, val_loader):
 # I/O
 if __name__=="__main__":
     parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer12_dim768_seq768', help="path to config")
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer12_dim512_seq512', help="path to config")
     parser.add_argument("--sft_file", type=str, default='./config/train.yaml', help="path to config")
     args = parser.parse_args()
     
@@ -117,7 +117,7 @@ if __name__=="__main__":
         file.write(yaml.dump(model_config))
     
     lora_config = None
-    if sft_config['sft_params']['type'] == 'lora':
+    if sft_config['sft_params']['type'] == 'lora' or sft_config['sft_params']['type'] == 'dora':
         lora_config = read_config(args.sft_file.replace('train.yaml', 'lora.yaml'))
         with open(os.path.join(save_dir,'lora.yaml'), "w") as file:
             file.write(yaml.dump(lora_config))
@@ -143,7 +143,9 @@ if __name__=="__main__":
     best_val_loss = 1e9
 
     #init model
-    model, tokenizer = init_model(model_config, model_path_dir, lora_config=lora_config)
+    model, tokenizer = init_model(model_config, model_path_dir, 
+                                  lora_config=lora_config, 
+                                  flag=sft_config['sft_params']['type'])
     model.to(device)
     set_model_train(model)
     print_rank_0('***************model****************')
@@ -182,7 +184,7 @@ if __name__=="__main__":
     if sft_config['compile']:
         print_rank_0("compiling the model... (takes a ~minute)")
         unoptimized_model = model
-        model = torch.compile(model) # requires PyTorch 2.0
+        model = torch.compile(model) # requires PyTorch 2.0  #sudo apt-get install build-essential
     # wrap model into DDP container
     if ddp:
         # Ignore the `freqs_cis` buffer so that DDP does not broadcast it at

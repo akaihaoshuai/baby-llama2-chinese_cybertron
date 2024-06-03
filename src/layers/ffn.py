@@ -13,13 +13,17 @@ class FeedForward(nn.Module):
                  dropout: float, 
                  act_fn='silu', 
                  lora_args: LoraArgs = None,
+                 flag: str = 'train',
                  ):
         super().__init__()
         intermediate_size = int(2 * intermediate_size / 3)
         intermediate_size = multiple_of * ((intermediate_size + multiple_of - 1) // multiple_of)
-        self.w1 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args)
-        self.w2 = create_linear(intermediate_size, hidden_size, bias=use_bias, lora_args=lora_args)
-        self.w3 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args)
+        if lora_args is not None and not(lora_args.lora_mudule == 'all' or lora_args.lora_mudule == 'mlp'):
+            lora_args = None
+
+        self.w1 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args, flag=flag)
+        self.w2 = create_linear(intermediate_size, hidden_size, bias=use_bias, lora_args=lora_args, flag=flag)
+        self.w3 = create_linear(hidden_size, intermediate_size, bias=use_bias, lora_args=lora_args, flag=flag)
         self.dropout = nn.Dropout(dropout)
         self.act_fn = get_act_fn(act_fn)
 
@@ -38,13 +42,18 @@ class MOElayers(nn.Module):
                  dropout: float = 0.1, 
                  act_fn: str ='silu', 
                  lora_args: LoraArgs = None,
+                 flag: str = 'train',
                  ):
         super().__init__()
         self.tp_size = 1
         self.num_total_experts = num_total_experts
         self.top_k = num_experts_per_tok
-
-        self.gate = create_linear(hidden_size, self.num_total_experts, bias=use_bias, lora_args=lora_args)
+        if lora_args is not None and not(lora_args.lora_mudule == 'all' or lora_args.lora_mudule == 'mlp'):
+            lora_args = None
+            
+        self.gate = create_linear(hidden_size, self.num_total_experts, bias=use_bias, 
+                                  lora_args=lora_args,
+                                  flag=flag)
 
         # self.mlp = FeedForward(hidden_size, intermediate_size, multiple_of, dropout)
         self.expert_indicies = numpy.array_split(range(self.num_total_experts), self.tp_size)[0].tolist()

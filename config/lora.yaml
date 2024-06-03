@@ -3,4 +3,4 @@ lora_attn_dim: 4   # 默认0，则使用full_finetune
 lora_attn_alpha: 128
 lora_dropout: 0.0
 lora_r_dropout: 0.0
-lora_mudule: 'linear'  # linear/embedding/all
+lora_mudule: 'attn'  # embedding/attn/mlp/all

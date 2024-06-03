@@ -92,7 +92,9 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class Attention(nn.Module):
-    def __init__(self, args: ModelArgs, lora_args: LoraArgs = None):
+    def __init__(self, args: ModelArgs, 
+                 lora_args: LoraArgs = None,
+                 flag: str = 'train'):  # train/fft/lora/dora etc
         super().__init__()
         self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         model_parallel_size = 1
@@ -100,10 +102,14 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.hidden_dim // args.n_heads
-        self.q_proj = create_linear(args.hidden_dim, args.n_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
-        self.k_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
-        self.v_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args)
-        self.o_proj = create_linear(args.n_heads * self.head_dim, args.hidden_dim, bias=args.bias, lora_args=lora_args)
+
+        if lora_args is not None and not(lora_args.lora_mudule == 'all' or lora_args.lora_mudule == 'attn'):
+            lora_args = None
+        
+        self.q_proj = create_linear(args.hidden_dim, args.n_heads    * self.head_dim, bias=args.bias, lora_args=lora_args, flag=flag)
+        self.k_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args, flag=flag)
+        self.v_proj = create_linear(args.hidden_dim, self.n_kv_heads * self.head_dim, bias=args.bias, lora_args=lora_args, flag=flag)
+        self.o_proj = create_linear(args.n_heads * self.head_dim, args.hidden_dim, bias=args.bias, lora_args=lora_args, flag=flag)
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
@@ -115,7 +121,6 @@ class Attention(nn.Module):
             mask = torch.full((1, 1, args.max_seq_len, args.max_seq_len), float("-inf"))
             mask = torch.triu(mask, diagonal=1)
             self.register_buffer("mask", mask)
-
 
         self.rope_scaling_factor = args.rope_scaling_factor
         self.max_position_embeddings = args.max_seq_len

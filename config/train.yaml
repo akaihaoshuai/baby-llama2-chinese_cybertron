@@ -9,8 +9,8 @@ test_data_path: [
         './data/test_zh_0.json',
         './data/test.json',
     ]
-log_interval : 200
-save_interval : 2000
+log_interval : 100
+save_interval : 100
 always_save_checkpoint : True # if True, always save a checkpoint after each eval
 max_epoch : 1
 
@@ -32,7 +32,7 @@ train_params:
   min_lr : 0.00001 # minimum learning rate, should be ~: learning_rate/10 per Chinchilla
 
 sft_params:
-  type: 'lora'  # fft/lora/
+  type: 'dora'  # fft/lora/dora
   only_save_lora: false
   max_epoch : 2
   # adamw optimizer

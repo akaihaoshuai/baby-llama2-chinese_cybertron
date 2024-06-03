@@ -48,7 +48,7 @@ def train_epoch(epoch, pretrain_config, master_process):
             optimizer.zero_grad(set_to_none=True)
 
         #打印日志
-        if step > 0 and step % pretrain_config['log_interval'] == 0 and master_process:
+        if step % pretrain_config['log_interval'] == 0 and master_process:
             set_model_eval(model)
             eval_model(raw_model, ctx)
             set_model_train(model)
@@ -133,7 +133,7 @@ if __name__=="__main__":
     best_val_loss = 1e9
     
     #init model
-    model, _ = init_model(model_config)
+    model, _ = init_model(model_config, flag='train')
     model.to(device)
     set_model_train(model)
     print_rank_0('***************model****************')
@@ -153,7 +153,7 @@ if __name__=="__main__":
     if pretrain_config['compile']:
         print_rank_0("compiling the model... (takes a ~minute)")
         unoptimized_model = model
-        model = torch.compile(model) # requires PyTorch 2.0
+        model = torch.compile(model) # requires PyTorch 2.0  #sudo apt-get install build-essential
     # wrap model into DDP container
     if ddp:
         # Ignore the `freqs_cis` buffer so that DDP does not broadcast it at
@@ -164,12 +164,10 @@ if __name__=="__main__":
         
     raw_model = model.module if ddp else model # unwrap DDP container if needed
 
-
      #-----init dataloader------
     train_ds = PretrainDataset(pretrain_config['train_data_path'], 
                                max_length=model_config['max_seq_len'],
                                memmap=True)
-
     if ddp:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_ds)
     else:

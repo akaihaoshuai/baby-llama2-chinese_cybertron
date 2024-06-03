@@ -3,8 +3,7 @@ from src.models.model_args import ModelArgs,LoraArgs
 from src.models import _get_model_architecture, _get_tokenizer
 
 
-def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=None):
-    # model init
+def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=None, flag='train'):
     if model_path is None:
         # init a new model from scratch
         print_rank_0("Initializing a new model from scratch")
@@ -15,7 +14,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=N
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
         model_architecture = _get_model_architecture(model_args.architecture)
-        model = model_architecture(model_args)
+        model = model_architecture(model_args, flag)
     else:
         # resume training from a checkpoint.
         model_path_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_path)
@@ -59,7 +58,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=N
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
         model_architecture = _get_model_architecture(model_args.architecture)
-        model = model_architecture(model_args, lora_args)
+        model = model_architecture(model_args, lora_args, flag)
 
         if 'model' in checkpoint:
             state_dict = checkpoint["model"]
@@ -93,7 +92,7 @@ def set_model_train(model):
     else:
         # 冻结非lora模块的梯度
         for name, param in model.named_parameters():
-            if 'lora' in name:
+            if 'lora' in name or 'dora' in name:
                 param.requires_grad = True
             else:
                 param.requires_grad = False

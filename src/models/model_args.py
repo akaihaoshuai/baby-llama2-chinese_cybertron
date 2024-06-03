@@ -47,7 +47,7 @@ class LoraArgs:
     lora_attn_alpha: int = 128
     lora_dropout: float = 0.0
     lora_r_dropout: float = 0.0
-    lora_mudule: str = 'linear'  # linear/embedding/all
+    lora_mudule: str = 'attn'  # embedding/attn/mlp/all
 
 
 @dataclass

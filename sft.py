@@ -39,7 +39,7 @@ def train_epoch(epoch, sft_config, master_process, lisa_ft=None, analaze_prof=No
             model.require_backward_grad_sync = 0 == sft_config['grad_accum_steps'] - 1
         with ctx:
             logits = model(X, Y).logits
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=0,reduce=False)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Y.view(-1), ignore_index=-1, reduce=False)
             loss_mask = loss_mask.view(-1)
             loss = torch.sum(loss*loss_mask)/loss_mask.sum()
             #loss = raw_model.last_loss

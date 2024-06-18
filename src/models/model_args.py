@@ -103,6 +103,7 @@ class TransformerBlockOutput(ModelOutput):
     """
 
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
+    router_logits: Optional[Tuple[torch.FloatTensor]] = None
     past_key_value: Optional[Tuple[torch.FloatTensor]] = None
     qk_heatmap: Optional[numpy.float16] = None
 
@@ -137,4 +138,6 @@ class BaseLLMModelOutput(ModelOutput):
     past_key_values: Optional[List[Tuple[torch.FloatTensor]]] = None
     last_hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     qk_heatmap_lists: Optional[List[numpy.float16]] = None
-    last_loss: Optional[torch.FloatTensor] = None
+    loss: Optional[torch.FloatTensor] = None
+    aux_loss: Optional[torch.FloatTensor] = None
+    z_loss: Optional[torch.FloatTensor] = None

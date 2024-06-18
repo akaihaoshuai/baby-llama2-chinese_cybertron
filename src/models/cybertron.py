@@ -16,6 +16,7 @@ from src.ft_opt.lisa import LISA_ft
 from src.layers.embedding import get_embedding
 from src.layers.short_recent_kv_cache import StartRecentKVCache
 from src.layers.sampler import Sampler
+from src.models.utils import *
 
 
 class RMSNorm(torch.nn.Module):
@@ -105,6 +106,7 @@ class TransformerBlock(nn.Module):
         self.dim = args.hidden_dim
         self.head_dim = args.hidden_dim // args.n_heads
         self.attention = Attention(args, lora_args, flag)
+        self.use_moe = args.use_moe
 
         if not args.use_moe:
             self.feed_forward = FeedForward(
@@ -118,7 +120,7 @@ class TransformerBlock(nn.Module):
                     flag=flag,
                 )
         else:
-            self.feed_forward = MOElayers(
+            self.moe_blocks = MOElayers(
                 hidden_size=args.hidden_dim,
                 intermediate_size=4 * args.hidden_dim,
                 num_total_experts=args.num_total_experts,
@@ -139,6 +141,7 @@ class TransformerBlock(nn.Module):
                 attention_mask: Optional[torch.Tensor] = None,
                 position_ids: Optional[torch.LongTensor] = None,
                 use_kv_cache: bool = False,
+                output_router_logits: Optional[bool] = False,
                 past_key_value: Optional[Tuple[torch.Tensor]] = None,
                 return_qk_head_hetmaps:bool=False):
         
@@ -150,16 +153,21 @@ class TransformerBlock(nn.Module):
                                              return_qk_head_hetmaps=return_qk_head_hetmaps)
         
         residual = hidden_states + attn_output.output
-        out = residual + self.feed_forward.forward(self.ffn_norm(residual))
+        if self.use_moe:
+            out, router_logits = self.moe_blocks.forward(self.ffn_norm(residual),
+                                                         output_router_logits=output_router_logits)
+            out = residual + out
+        else:
+            out = residual + self.feed_forward.forward(self.ffn_norm(residual))
+            router_logits = None
 
         return TransformerBlockOutput(hidden_states=out,
+                                      router_logits=router_logits,
                                       past_key_value=attn_output.past_key_value,
                                       qk_heatmap=attn_output.qk_heatmap)
 
 
 class Cybertron(nn.Module):
-    last_loss: Optional[torch.Tensor]
-
     def __init__(self, 
                  args: ModelArgs, 
                  lora_args: LoraArgs = None,
@@ -201,7 +209,6 @@ class Cybertron(nn.Module):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * args.n_layers))
 
         # Initialize attribute for the loss of the last forward call. This will be set if the forward is called with a targets tensor.
-        self.last_loss = None
 
         self.cache_type = args.cache_type
         if self.cache_type == 'recent':
@@ -251,6 +258,17 @@ class Cybertron(nn.Module):
 
         return combined_attention_mask
     
+        # Copied from transformers.models.switch_transformers.modeling_switch_transformers.SwitchTransformersForConditionalGeneration._unpack_router_logits with SwitchTransformers->GPTSanJapanese
+    def _unpack_router_logits(self, router_outputs):
+        total_router_logits = []
+        total_expert_indexes = []
+        for router_output in router_outputs:
+            if len(router_output[0].shape) > 1:
+                router_logits, expert_indexes = router_output
+                total_router_logits.append(router_logits)
+                total_expert_indexes.append(expert_indexes)
+        return torch.cat(total_router_logits, dim=1), torch.cat(total_expert_indexes, dim=1)
+    
     def forward(self, tokens: torch.Tensor, 
                 targets: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None,
@@ -293,8 +311,11 @@ class Cybertron(nn.Module):
 
         hidden_states = self.dropout(inputs_embeds)
 
+        model_is_train = True if targets is not None else False
+
         qk_heatmap_lists = []
         new_past_key_values = [] if use_kv_cache else None
+        all_router_probs = [] if model_is_train and self.args.use_moe else None
         for idx, layer in enumerate(self.layers):
             past_key_value = (
                 past_key_values[idx] if past_key_values is not None else None
@@ -305,6 +326,7 @@ class Cybertron(nn.Module):
                               position_ids=position_ids,
                               use_kv_cache=use_kv_cache,
                               past_key_value=past_key_value,
+                              output_router_logits= model_is_train and self.args.use_moe,
                               return_qk_head_hetmaps=return_qk_head_hetmaps)
             hidden_states = layer_out.hidden_states
 
@@ -314,26 +336,42 @@ class Cybertron(nn.Module):
             if use_kv_cache:
                 new_past_key_values.append(layer_out.past_key_value)
 
+            if model_is_train and self.args.use_moe:
+                all_router_probs.append(layer_out.router_logits)
+
         hidden_states = self.norm(hidden_states)
 
+        z_loss = None
+        aux_loss = None
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.output(hidden_states)
-            self.last_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
             last_logits = None
+
+            if model_is_train and self.args.use_moe:
+                # Compute the router loss (z_loss + auxiliary loss) for each router in the encoder and decoder
+                router_logits, expert_indexes = self._unpack_router_logits(all_router_probs)
+                z_loss = router_z_loss_func(router_logits)
+                router_probs = nn.Softmax(dim=-1)(router_logits)
+                aux_loss = load_balancing_loss_func(router_probs, expert_indexes)
         else:
             # inference-time mini-optimization: only forward the output on the very last position
             logits = None
             last_logits = self.output(hidden_states[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            self.last_loss = None
-        
+            loss = None
+
+
+
         if not return_qk_head_hetmaps:
             qk_heatmap_lists = None
 
         return BaseLLMModelOutput(logits=logits,
                                   last_logits=last_logits,
                                   past_key_values=new_past_key_values,
-                                  last_loss=self.last_loss,
+                                  loss=loss,
+                                  z_loss=z_loss,
+                                  aux_loss=aux_loss,
                                   last_hidden_states=hidden_states,
                                   qk_heatmap_lists=qk_heatmap_lists)
 

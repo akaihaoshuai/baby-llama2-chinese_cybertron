@@ -64,7 +64,9 @@ class MOElayers(nn.Module):
         ])
 
         
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor,
+                output_router_logits: Optional[bool] = False,
+                ) -> torch.Tensor:
         bs, num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
         # router_logits: (num_tokens, n_experts)
@@ -90,4 +92,5 @@ class MOElayers(nn.Module):
             else:
                 final_hidden_states.add_(current_hidden_states)
 
-        return final_hidden_states.view(bs, num_tokens, hidden_dim)
+        return_router_logits = router_logits if output_router_logits else None
+        return final_hidden_states.view(bs, num_tokens, hidden_dim), return_router_logits

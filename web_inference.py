@@ -116,7 +116,7 @@ def main(args):
     demo = gr.Interface(
         respond,
         inputs=[
-            gr.File(type="filepath", label="Input material txt"),
+            gr.File(type="file", label="Input material txt"),
             gr.Textbox(lines=1, placeholder=None, label="Question"),
         ],
         outputs=[

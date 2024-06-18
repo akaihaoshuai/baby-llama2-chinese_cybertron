@@ -13,7 +13,7 @@ from typing import Optional, List
 # from http://arxiv.org/abs/2402.09353
 # from https://zhuanlan.zhihu.com/p/682515842
 
-# from https://github.com/microsoft/LoRA/tree/main/loralib
+
 class DoRALayer():
     def __init__(
         self, 

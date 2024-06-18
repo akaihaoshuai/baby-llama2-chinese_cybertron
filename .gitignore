@@ -1,2 +1,7 @@
 data/
 out/
+profile/
+*/*.pyc
+*/*/*.pyc
+*/*/*/*.pyc
+*/*/*/*/*.pyc

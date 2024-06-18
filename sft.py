@@ -10,11 +10,15 @@ import yaml
 from src.utils import *
 from src.data.dataset_sft import SFTDataset
 from src.model_runner import init_model, eval_model, set_model_eval, set_model_train
+from src.profile.anylaze import Anylaze
 
 #------------------------------------------------------------------------------
-def train_epoch(epoch, sft_config, master_process):
+def train_epoch(epoch, sft_config, master_process, lisa_ft=None, analaze_prof=None):
     start_time=time.time()
     for step, (X, Y,loss_mask) in enumerate(train_loader):
+        set_model_train(model, lisa_ft, step)
+        analaze_prof.start()
+
         X=X.to(device)
         Y=Y.to(device)
         loss_mask=loss_mask.to(device)
@@ -54,11 +58,12 @@ def train_epoch(epoch, sft_config, master_process):
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
 
+        analaze_prof.stop()
+        
         #打印日志
         if step % sft_config['log_interval'] == 0 and master_process:
             set_model_eval(model)
             eval_model(raw_model, ctx)
-            set_model_train(model)
 
             spend_time=time.time()-start_time
             logger.info(
@@ -151,6 +156,12 @@ if __name__=="__main__":
     print_rank_0('***************model****************')
     print_rank_0(model)
 
+    lisa_ft = None
+    if sft_config['sft_params']['type'].upper() == 'LISA':
+        from src.ft_opt.lisa import LISA_ft
+        assert sft_config['sft_params']['interval_steps'] % sft_config['grad_accum_steps'] == 0
+        lisa_ft = LISA_ft(sft_config['sft_params']['act_layers'], sft_config['sft_params']['interval_steps'], model)
+
     # initialize a GradScaler. If enabled=False scaler is a no-op
     scaler = torch.cuda.amp.GradScaler(enabled=(sft_config['dtype'] == 'float16'))
     # optimizer
@@ -196,8 +207,9 @@ if __name__=="__main__":
     raw_model = model.module if ddp else model # unwrap DDP container if needed
 
     # training loop
+    analaze_prof = Anylaze(sft_config['use_profile'])
     for epoch in range(sft_config['max_epoch']):
-        train_epoch(epoch, sft_config, master_process)
+        train_epoch(epoch, sft_config, master_process, lisa_ft, analaze_prof)
         if master_process:
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
     if ddp:

@@ -12,6 +12,8 @@ from src.utils import *
 from src.models.model_args import *
 from src.layers.attention import Attention
 from src.layers.ffn import FeedForward, MOElayers
+from src.ft_opt.lisa import LISA_ft
+from src.layers.embedding import get_embedding
 
 
 class RMSNorm(torch.nn.Module):
@@ -157,7 +159,8 @@ class Cybertron(nn.Module):
     def __init__(self, 
                  args: ModelArgs, 
                  lora_args: LoraArgs = None,
-                 flag: str = 'train'):  # train/fft/lora/dora etc
+                 tokenizer = None,
+                 flag: str = 'train'):  # train/fft/lora/dora/LISA etc
         super().__init__()
         self.args = args
         self.flag = flag
@@ -168,7 +171,7 @@ class Cybertron(nn.Module):
         self.pad_id = args.pad_id
         self.n_layers = args.n_layers
 
-        self.tok_embeddings = nn.Embedding(args.vocab_size, args.hidden_dim)
+        self.tok_embeddings = get_embedding(args.embedding_type, args.vocab_size, args.hidden_dim, tokenizer)
         self.dropout = nn.Dropout(args.dropout)
         self.layers = torch.nn.ModuleList()
         for layer_id in range(args.n_layers):
@@ -193,6 +196,7 @@ class Cybertron(nn.Module):
 
         # Initialize attribute for the loss of the last forward call. This will be set if the forward is called with a targets tensor.
         self.last_loss = None
+
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):

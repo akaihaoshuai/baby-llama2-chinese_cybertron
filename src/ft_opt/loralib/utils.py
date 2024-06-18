@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from typing import Dict
 
-from src.layers.loralib.lora import *
+from src.ft_opt.loralib.lora import *
 
 # from https://github.com/microsoft/LoRA/tree/main/loralib
 def mark_only_lora_as_trainable(model: nn.Module, bias: str = 'none') -> None:

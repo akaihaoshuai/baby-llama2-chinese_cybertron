@@ -16,6 +16,7 @@ max_epoch : 1
 
 batch_size : 16  # if gradient_accumulation_steps > 1, this is the micro-batch size
 grad_accum_steps : 16 # used to simulate larger batch sizes
+use_profile: false
 
 train_params:
   # adamw optimizer
@@ -32,7 +33,7 @@ train_params:
   min_lr : 0.00001 # minimum learning rate, should be ~: learning_rate/10 per Chinchilla
 
 sft_params:
-  type: 'dora'  # fft/lora/dora
+  type: 'fft'  # fft/lora/dora/lisa
   only_save_lora: false
   max_epoch : 2
   # adamw optimizer
@@ -41,6 +42,10 @@ sft_params:
   beta1 : 0.9
   beta2 : 0.95
   grad_clip : 1.0 # clip gradients at this value, or disable if :: 0.0
+
+  # lisa
+  interval_steps : 16 # 切换激活层的step
+  act_layers : 1 # 激活的层数
 
   # learning rate decay settings
   decay_lr : True # whether to decay the learning rate

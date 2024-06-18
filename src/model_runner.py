@@ -1,7 +1,7 @@
 from src.utils import *
 from src.models.model_args import ModelArgs,LoraArgs
 from src.models import _get_model_architecture, _get_tokenizer
-
+from src.ft_opt.lisa import LISA_ft
 
 def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=None, flag='train'):
     if model_path is None:
@@ -14,7 +14,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=N
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
         model_architecture = _get_model_architecture(model_args.architecture)
-        model = model_architecture(model_args, flag)
+        model = model_architecture(model_args, tokenizer=tokenizer, flag=flag)
     else:
         # resume training from a checkpoint.
         model_path_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_path)
@@ -58,7 +58,7 @@ def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=N
         model_args.eos_id = tokenizer.tokenizer.eos_id
         model_args.pad_id = tokenizer.tokenizer.pad_id
         model_architecture = _get_model_architecture(model_args.architecture)
-        model = model_architecture(model_args, lora_args, flag)
+        model = model_architecture(model_args, lora_args, tokenizer=tokenizer, flag=flag)
 
         if 'model' in checkpoint:
             state_dict = checkpoint["model"]
@@ -86,9 +86,14 @@ def init_model(model_config=None, model_path=None, tokenizer=None, lora_config=N
     return model, tokenizer
 
 
-def set_model_train(model):
+def set_model_train(model, lisa_ft: LISA_ft=None, step=0):
     if model.lora_args is None:
-        model.train()
+        if lisa_ft is not None:
+            if step % lisa_ft.interval_steps == 0:
+                lisa_ft.switch_active_layers()
+            lisa_ft.set_train_status()
+        else:
+            model.train()
     else:
         # 冻结非lora模块的梯度
         for name, param in model.named_parameters():

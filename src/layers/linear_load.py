@@ -1,7 +1,7 @@
 from torch import nn
 from src.models.model_args import LoraArgs
-from src.layers.loralib import LoRALinear
-from src.layers.loralib.dora import DoRALinear
+from src.ft_opt.loralib import LoRALinear
+from src.ft_opt.dora import DoRALinear
 
 def create_linear(in_features, out_features, 
                   bias=False, 

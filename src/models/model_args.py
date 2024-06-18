@@ -19,6 +19,8 @@ class ModelArgs:
     bias: bool = False
     act_fn: str = 'silu'
 
+    embedding_type : str = "default"  # default/Abacus
+
     use_moe: bool = False
     num_total_experts: int = 2
     num_experts_per_tok: int = 1

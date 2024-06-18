@@ -8,12 +8,15 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from src.data.dataset_pretrain import PretrainDataset
 from src.utils import *
 from src.model_runner import init_model, eval_model, set_model_eval, set_model_train
+from src.profile.anylaze import Anylaze
 
-def train_epoch(epoch, pretrain_config, master_process):
+def train_epoch(epoch, pretrain_config, master_process, analaze_prof):
     start_time=time.time()
     for step, (X, Y) in enumerate(train_loader):
         X=X.to(device)
         Y=Y.to(device)
+        analaze_prof.start()
+
         if pretrain_config['train_params']['decay_lr'] :
             lr = get_lr(epoch*iter_per_epoch+step, pretrain_config['train_params']) 
         else :
@@ -46,6 +49,8 @@ def train_epoch(epoch, pretrain_config, master_process):
             scaler.update()
             # flush the gradients as soon as we can, no need for this memory anymore
             optimizer.zero_grad(set_to_none=True)
+
+        analaze_prof.stop()
 
         #打印日志
         if step % pretrain_config['log_interval'] == 0 and master_process:
@@ -192,10 +197,13 @@ if __name__=="__main__":
     #     num_workers=0,
     # )
 
+    # tensorboard --logdir=./profile
+    analaze_prof = Anylaze(pretrain_config['use_profile'])
+
     # training loop
     iter_per_epoch=len(train_loader)
     for epoch in range(pretrain_config['max_epoch']):
-        train_epoch(epoch, pretrain_config, master_process)
+        train_epoch(epoch, pretrain_config, master_process, analaze_prof)
         #val_loss=valid_epoch(epoch)
         if master_process:  #一般用0，当然，可以选任意的rank保存。
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))

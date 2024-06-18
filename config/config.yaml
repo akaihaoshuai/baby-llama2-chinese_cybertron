@@ -1,8 +1,8 @@
 # model 根据需要更改 
 architecture: 'Cybertron'
-max_seq_len : 768
-hidden_dim : 768
-n_layers : 12
+max_seq_len : 512
+hidden_dim : 512
+n_layers : 8
 n_heads : 8
 multiple_of : 32
 dropout : 0.0 # for pretraining 0 is good, for finetuning try 0.1+
@@ -11,3 +11,4 @@ vocab_size: 64793
 rope_scaling_factor: 1.0
 rope_beta: 10000.0
 rope_scaling_type: 'dynamic'
+embedding_type: 'default'  # default/Abacus

@@ -42,6 +42,12 @@ class ModelArgs:
 
     linear_method : str = 'linear'  # linear
 
+    # inference cache
+    cache_type : str = 'all'   # all/recent
+    cache_start_size : int = 10
+    cache_recent_size : int = 1024
+    
+
 @dataclass
 class LoraArgs:
     # lora

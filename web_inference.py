@@ -8,6 +8,7 @@ from argparse import ArgumentParser
 import gradio as gr
 from src.utils import *
 from src.model_runner import init_model
+import time
 
 title = "baby-llama2-chinese for Long-context LLMs"
 
@@ -90,9 +91,16 @@ def build_generator(
         # else:
         x = tokenizer.encode(prompt, add_special_tokens=False) + [tokenizer.special_tokens['<eos>']]
         x = (torch.tensor(x, dtype=torch.long, device=device)[None, ...])
+        
+        print('-'*50)
+        print(f'input: {prompt}')
+        start_time = time.time()
         outputs = model.generate(x)
-        generated_text = tokenizer.decode(outputs[0])
+        end_time = time.time()
+        generated_text = tokenizer.decode(outputs)
         generated_text = generated_text.replace(prompt, '')
+        print(f'output: {generated_text}')
+        print(f'speed: {len(outputs)/(end_time - start_time):.3f} token/s.')
 
         return generated_text
 
@@ -132,7 +140,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer8_dim512_seq512', help="path to config")
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8898)
     args = parser.parse_args()

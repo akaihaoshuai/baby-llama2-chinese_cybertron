@@ -14,6 +14,8 @@ from src.layers.attention import Attention
 from src.layers.ffn import FeedForward, MOElayers
 from src.ft_opt.lisa import LISA_ft
 from src.layers.embedding import get_embedding
+from src.layers.short_recent_kv_cache import StartRecentKVCache
+from src.layers.sampler import Sampler
 
 
 class RMSNorm(torch.nn.Module):
@@ -136,12 +138,14 @@ class TransformerBlock(nn.Module):
                 hidden_states: torch.Tensor,
                 attention_mask: Optional[torch.Tensor] = None,
                 position_ids: Optional[torch.LongTensor] = None,
+                use_kv_cache: bool = False,
                 past_key_value: Optional[Tuple[torch.Tensor]] = None,
                 return_qk_head_hetmaps:bool=False):
         
         attn_output = self.attention.forward(self.attention_norm(hidden_states), 
                                              attention_mask=attention_mask,
                                              position_ids=position_ids,
+                                             use_kv_cache=use_kv_cache,
                                              past_key_value=past_key_value,
                                              return_qk_head_hetmaps=return_qk_head_hetmaps)
         
@@ -179,6 +183,8 @@ class Cybertron(nn.Module):
         self.norm = RMSNorm(args.hidden_dim, eps=args.norm_eps)
         self.output = nn.Linear(args.hidden_dim, args.vocab_size, bias=False)
 
+        self.sampler = Sampler()
+
         # share the unembedding parameters with the embedding parameters
         self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
 
@@ -196,6 +202,15 @@ class Cybertron(nn.Module):
 
         # Initialize attribute for the loss of the last forward call. This will be set if the forward is called with a targets tensor.
         self.last_loss = None
+
+        self.cache_type = args.cache_type
+        if self.cache_type == 'recent':
+            self.kv_cache = StartRecentKVCache(
+                start_size=args.cache_start_size,
+                recent_size=args.cache_recent_size,
+                k_seq_dim=2,  # k_seq数据在第几维
+                v_seq_dim=2,
+            )
 
 
     def _init_weights(self, module):
@@ -240,7 +255,8 @@ class Cybertron(nn.Module):
                 targets: Optional[torch.Tensor] = None,
                 attention_mask: Optional[torch.Tensor] = None,
                 position_ids: Optional[torch.LongTensor] = None,
-                past_key_values: Optional[List[Tuple[torch.Tensor]]] = None,
+                use_kv_cache: bool = False,
+                past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
                 return_qk_head_hetmaps: bool = False,
                 ) -> torch.Tensor:
         batch_size, seqlen = tokens.shape
@@ -278,7 +294,7 @@ class Cybertron(nn.Module):
         hidden_states = self.dropout(inputs_embeds)
 
         qk_heatmap_lists = []
-        new_past_key_values = [] if past_key_values is not None else None
+        new_past_key_values = [] if use_kv_cache else None
         for idx, layer in enumerate(self.layers):
             past_key_value = (
                 past_key_values[idx] if past_key_values is not None else None
@@ -287,6 +303,7 @@ class Cybertron(nn.Module):
             layer_out = layer(hidden_states, 
                               attention_mask=attention_mask,
                               position_ids=position_ids,
+                              use_kv_cache=use_kv_cache,
                               past_key_value=past_key_value,
                               return_qk_head_hetmaps=return_qk_head_hetmaps)
             hidden_states = layer_out.hidden_states
@@ -294,7 +311,7 @@ class Cybertron(nn.Module):
             if return_qk_head_hetmaps:
                 qk_heatmap_lists.append(layer_out.qk_heatmap)
 
-            if past_key_values is not None:
+            if use_kv_cache:
                 new_past_key_values.append(layer_out.past_key_value)
 
         hidden_states = self.norm(hidden_states)
@@ -368,10 +385,9 @@ class Cybertron(nn.Module):
     def generate(self, input_ids, 
                  max_new_tokens=128, 
                  temperature=1.0, 
-                 top_k=None,
-                 attention_mask=None,
-                 position_ids=None,
-                 use_cache=None,
+                 top_k : int = 0,
+                 top_p : float = 1.0,
+                 use_kv_cache: bool = True,
                  streamer=None,
                  return_qk_head_hetmaps: bool = False,
                  ):
@@ -381,35 +397,45 @@ class Cybertron(nn.Module):
         Most likely you'll want to make sure to be in set_model_eval(model) mode of operation for this.
         Also note this is a super inefficient version of sampling with no key/value cache.
         """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            token_cond = input_ids if input_ids.size(1) <= self.args.max_seq_len else input_ids[:, -self.args.max_seq_len:]
-            # forward the model to get the logits for the index in the sequence
-            outputs = self(token_cond, return_qk_head_hetmaps=return_qk_head_hetmaps)
+        if self.cache_type == 'recent' and use_kv_cache and past_key_values is not None:
+            space_needed = input_ids.shape[1] + max_new_tokens
+            past_key_values = self.kv_cache.evict_for_space(past_key_values, space_needed) # 只取需要的缓存
 
-            logits = outputs.last_logits[:, -1, :] # crop to just the final time step
-            if temperature == 0.0:
-                # "sample" the single most likely index
-                _, token_next = torch.topk(logits, k=1, dim=-1)
-            else:
-                # pluck the logits at the final step and scale by desired temperature
-                logits = logits / temperature
-                # optionally crop the logits to only the top k options
-                if top_k is not None:
-                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                    logits[logits < v[:, [-1]]] = -float('Inf')
-                # apply softmax to convert logits to (normalized) probabilities
-                probs = F.softmax(logits, dim=-1)
-                token_next = torch.multinomial(probs, num_samples=1)
+        # 预填充
+        outputs = self(tokens=input_ids,
+                       use_kv_cache=use_kv_cache,
+                       )
+        
+        past_key_values = outputs.past_key_values
+        pred_token_idx=self.sampler(outputs.last_logits[-1], 
+                                    temperature=temperature, 
+                                    top_k=top_k, 
+                                    top_p=top_p)
+        
+        generated_ids = [pred_token_idx.item()]
+
+        for _ in range(max_new_tokens - 1):
+            outputs = self(tokens=pred_token_idx,
+                           past_key_values=past_key_values,
+                           return_qk_head_hetmaps=return_qk_head_hetmaps
+                           )
+            
+            past_key_values = outputs.past_key_values
+            pred_token_idx=self.sampler(outputs.last_logits[-1], 
+                                        temperature=temperature, 
+                                        top_k=top_k, 
+                                        top_p=top_p)
+            
             # append sampled index to the running sequence and continue
-            input_ids = torch.cat((input_ids, token_next), dim=1)
-            if token_next==self.eos_id:
+            generated_ids.append(pred_token_idx.item())
+
+            if pred_token_idx==self.eos_id:
                 break
         
         if return_qk_head_hetmaps:
-            return input_ids, outputs.qk_heatmap_lists
+            return generated_ids, outputs.qk_heatmap_lists
         else:
-            return input_ids
+            return generated_ids
 
     def export(self, filepath='model.bin'):
         """export the model weights in fp32 into .bin file to be read from C"""

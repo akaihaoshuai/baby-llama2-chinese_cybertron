@@ -26,19 +26,19 @@ def main(args):
     else:
         outputs = model.generate(x)
 
-    generated_text = tokenizer.decode(outputs[0])
+    generated_text = tokenizer.decode(outputs)
     generated_text = generated_text.replace(args.prompt, '')
     print_rank_0(f'prompt: {args.prompt}. \nanswer: {generated_text}')
 
     if args.return_qk_head_hetmaps:
         from src.profile.visualize import display_qk_heatmap_per_head
-        text_list = [tokenizer.decode(token) for token in outputs[0]]
+        text_list = [tokenizer.decode(token) for token in outputs]
         display_qk_heatmap_per_head(qk_heatmaps, text_list, model_path_dir.split('/')[-1])
 
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer10_dim512_seq256', help="path to config")
+    parser.add_argument("--model_path", type=str, default='./out/pretrain_layer8_dim512_seq512', help="path to config")
     parser.add_argument("--prompt", type=str, default='where are you from?', help="path to config")
     parser.add_argument("--return_qk_head_hetmaps", type=bool, default=False, help="save qkhead heatmap")
     args = parser.parse_args()

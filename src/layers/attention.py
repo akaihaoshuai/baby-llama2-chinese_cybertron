@@ -167,6 +167,7 @@ class Attention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        use_kv_cache: bool = False,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         return_qk_head_hetmaps:bool=False,
     ):
@@ -188,7 +189,9 @@ class Attention(nn.Module):
         if past_key_value is not None:
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
-            past_key_value = (key_states, value_states, cos, sin)
+
+        
+        past_key_value = (key_states, value_states, cos, sin) if use_kv_cache else None
 
         # grouped multiquery attention: expand out keys and values
         key_states = repeat_kv(key_states, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)

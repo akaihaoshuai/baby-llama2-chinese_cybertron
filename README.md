@@ -6,12 +6,9 @@
 ![image](https://github.com/akaihaoshuai/baby-llama2-chinese_cybertron/blob/main/doc/img/dialogue.png)
 
 ## 更新记录
->2024.05.18：预训练效果正常，loss<0.3
+>2024.05.18：去除掉一些无用的功能，预训练效果如下，loss<0.3
 ><br />
 >![image](https://github.com/akaihaoshuai/baby-llama2-chinese_cybertron/blob/main/doc/img/pretrain_loss.png)
-
->2024.05.16：由于有些累积bug没解决，之前更新全部保存到bug_pause_20240516分支中。重新切换主分支继续更新相关内容，会做更加详细的测试。
-如有用到之前更新的内容，也会重新引入功能进行测试。
 
 >2024.03.20：增加RLHF代码，可以运行，效果未验证。[https://zhuanlan.zhihu.com/p/686217468]
 

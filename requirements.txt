@@ -13,3 +13,4 @@ jsonlines
 evaluate
 gradio
 pyyaml
+deepspeed

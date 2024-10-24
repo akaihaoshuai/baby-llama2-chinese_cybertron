@@ -10,14 +10,12 @@ import yaml
 from src.utils import *
 from src.data.dataset_sft import SFTDataset
 from src.model_runner import init_model, eval_model, set_model_eval, set_model_train
-from src.profile.anylaze import Anylaze
 
 #------------------------------------------------------------------------------
-def train_epoch(epoch, sft_config, master_process, lisa_ft=None, analaze_prof=None):
+def train_epoch(epoch, sft_config, master_process, lisa_ft=None):
     start_time=time.time()
     for step, (X, Y,loss_mask) in enumerate(train_loader):
         set_model_train(model, lisa_ft, step)
-        analaze_prof.start()
 
         X=X.to(device)
         Y=Y.to(device)
@@ -58,8 +56,6 @@ def train_epoch(epoch, sft_config, master_process, lisa_ft=None, analaze_prof=No
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
 
-        analaze_prof.stop()
-        
         #打印日志
         if step % sft_config['log_interval'] == 0 and master_process:
             set_model_eval(model)
@@ -207,9 +203,8 @@ if __name__=="__main__":
     raw_model = model.module if ddp else model # unwrap DDP container if needed
 
     # training loop
-    analaze_prof = Anylaze(sft_config['use_profile'])
     for epoch in range(sft_config['max_epoch']):
-        train_epoch(epoch, sft_config, master_process, lisa_ft, analaze_prof)
+        train_epoch(epoch, sft_config, master_process, lisa_ft)
         if master_process:
             torch.save(raw_model.state_dict(),'{}/epoch_{}.pth'.format(save_dir,epoch))
     if ddp:

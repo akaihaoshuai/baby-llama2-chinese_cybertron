@@ -1,3 +1,5 @@
+# https://github.com/SkyworkAI/MoH/blob/main/MoH-LLaMA3/Inference_code/modeling_llama.py
+
 import math
 import struct
 import inspect

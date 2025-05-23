@@ -29,5 +29,6 @@ if __name__=="__main__":
     print_rank_0('sft_to_pretrain.')
     # sft_to_pretrain()
 
+
     print_rank_0('sft_process.')
     sft_process()
